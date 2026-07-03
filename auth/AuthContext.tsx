@@ -2,7 +2,7 @@ import React, { createContext, useState, useEffect, useContext } from 'react';
 import { supabase } from '../supabase';
 import { User } from '@supabase/supabase-js';
 import { UserRole } from '../types';
-import { isAdminEmail } from '../config/admin';
+import { getUserRole } from '../services/supabase.service';
 
 // Augmented user that exposes `uid` (Firebase-style) and `displayName`
 // so existing components keep working with the Supabase auth user.
@@ -49,50 +49,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [role, setRole] = useState<UserRole>(UserRole.GUEST);
   const [loading, setLoading] = useState(true);
 
-  const fetchRole = async (userId: string, userEmail: string | undefined, retries = 3, fallbackRole = UserRole.GUEST) => {
+  const fetchRole = async (userId: string, retries = 3, fallbackRole = UserRole.GUEST) => {
     try {
-      // SECURITY: Check if user is admin by email FIRST
-      if (userEmail && isAdminEmail(userEmail)) {
-        console.log('🔐 Admin email detected, setting ADMIN role');
-        setRole(UserRole.ADMIN);
-        
-        // Also update the database to ensure consistency
-        await supabase
-          .from('users')
-          .update({ role: UserRole.ADMIN })
-          .eq('id', userId);
-        
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from('users')
-        .select('role')
-        .eq('id', userId)
-        .maybeSingle();
-
-      if (error) {
-        console.error('Error fetching role:', error);
-        // Retry if it's a connection error
-        if (retries > 0 && error.message.includes('406')) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          return fetchRole(userId, userEmail, retries - 1, fallbackRole);
-        }
-        setRole(fallbackRole);
-        return;
-      }
-
-      if (!data) {
-        // Profile doesn't exist yet, retry a few times
+      const fetchedRole = await getUserRole(userId);
+      if (!fetchedRole) {
         if (retries > 0) {
           await new Promise(resolve => setTimeout(resolve, 1000));
-          return fetchRole(userId, userEmail, retries - 1, fallbackRole);
+          return fetchRole(userId, retries - 1, fallbackRole);
         }
         setRole(fallbackRole);
         return;
       }
 
-      setRole((data?.role as UserRole) || UserRole.GUEST);
+      setRole(fetchedRole);
     } catch (error) {
       console.error('Error fetching role:', error);
       setRole(fallbackRole);
@@ -104,7 +73,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const { data: { session } } = await supabase.auth.getSession();
       setUser(mapUser(session?.user ?? null));
       if (session?.user) {
-        await fetchRole(session.user.id, session.user.email, 3, getMetadataRole(session.user));
+        await fetchRole(session.user.id, 3, getMetadataRole(session.user));
       } else {
         setRole(UserRole.GUEST);
       }
@@ -119,7 +88,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setUser(mapUser(session?.user ?? null));
       if (session?.user) {
-        await fetchRole(session.user.id, session.user.email, 3, getMetadataRole(session.user));
+        await fetchRole(session.user.id, 3, getMetadataRole(session.user));
       } else {
         setRole(UserRole.GUEST);
       }
@@ -139,7 +108,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       data: { user: currentUser },
     } = await supabase.auth.getUser();
     if (currentUser) {
-      await fetchRole(currentUser.id, currentUser.email, 3, getMetadataRole(currentUser));
+      await fetchRole(currentUser.id, 3, getMetadataRole(currentUser));
     }
   };
 

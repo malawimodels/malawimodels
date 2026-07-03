@@ -1,55 +1,57 @@
 
-import React, { useState, createContext } from 'react';
+import React, { Suspense, lazy, useEffect, useState, createContext } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { UserRole } from './types';
-import { isAdminEmail } from './config/admin';
-import Home from './pages/Home';
-import Profile from './pages/Profile';
-import Dashboard from './pages/Dashboard';
-import ClientDashboard from './pages/ClientDashboard';
-import AgencyDashboard from './pages/AgencyDashboard'; 
-import Agencies from './pages/Agencies'; 
-import AgencyProfile from './pages/AgencyProfile'; 
-import AgencyRegistration from './pages/AgencyRegistration'; // NEW
-import Register from './pages/Register';
 import Layout from './components/Layout';
-import CastingCall from './pages/CastingCall';
-import Shortlist from './pages/Shortlist';
-import HelpCenter from './pages/HelpCenter';
-import SafetyTrust from './pages/SafetyTrust';
-import Contact from './pages/Contact';
-import Admin from './pages/Admin';
 import { NotificationProvider } from './components/NotificationSystem';
 import { ThemeProvider } from './components/ThemeContext';
+import { clearSavedModels, getSavedModelIds, toggleSavedModel } from './services/supabase.service';
+
+const Home = lazy(() => import('./pages/Home'));
+const Profile = lazy(() => import('./pages/Profile'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const ClientDashboard = lazy(() => import('./pages/ClientDashboard'));
+const AgencyDashboard = lazy(() => import('./pages/AgencyDashboard'));
+const Agencies = lazy(() => import('./pages/Agencies'));
+const AgencyProfile = lazy(() => import('./pages/AgencyProfile'));
+const AgencyRegistration = lazy(() => import('./pages/AgencyRegistration'));
+const Register = lazy(() => import('./pages/Register'));
+const CastingCall = lazy(() => import('./pages/CastingCall'));
+const Shortlist = lazy(() => import('./pages/Shortlist'));
+const HelpCenter = lazy(() => import('./pages/HelpCenter'));
+const SafetyTrust = lazy(() => import('./pages/SafetyTrust'));
+const Contact = lazy(() => import('./pages/Contact'));
+const Admin = lazy(() => import('./pages/Admin'));
 
 export const ShortlistContext = createContext<{
   shortlist: string[];
   toggleShortlist: (id: string) => void;
-}>({ shortlist: [], toggleShortlist: () => {} });
+  clearShortlist: () => void;
+}>({ shortlist: [], toggleShortlist: () => {}, clearShortlist: () => {} });
 
 const ProtectedRoute = ({ children, allowedRoles }: { children?: React.ReactNode, allowedRoles: UserRole[] }) => {
-  const { role, user, loading } = useAuth();
+  const { role, loading } = useAuth();
   
   if (loading) {
     return <div className="min-h-screen bg-brand-bg text-white flex items-center justify-center">Loading...</div>;
   }
   
-  // Special case: Admin access by email (even if role not yet set in DB)
-  const isAdminByEmail = user && isAdminEmail(user.email);
-  const hasAdminAccess = allowedRoles.includes(UserRole.ADMIN) && isAdminByEmail;
-  
-  if (!allowedRoles.includes(role) && !hasAdminAccess) {
+  if (!allowedRoles.includes(role)) {
     // Redirect to appropriate dashboard based on user's role
     if (role === UserRole.MODEL) return <Navigate to="/dashboard" replace />;
     if (role === UserRole.AGENCY) return <Navigate to="/agency-dashboard" replace />;
     if (role === UserRole.CLIENT) return <Navigate to="/client-dashboard" replace />;
-    if (role === UserRole.ADMIN || isAdminByEmail) return <Navigate to="/admin" replace />;
+    if (role === UserRole.ADMIN) return <Navigate to="/admin" replace />;
     return <Navigate to="/" replace />;
   }
   
   return <>{children}</>;
 };
+
+const PageLoader = () => (
+  <div className="min-h-[50vh] bg-brand-bg text-white flex items-center justify-center">Loading...</div>
+);
 
 const AppRoutes = () => {
   const { role } = useAuth();
@@ -116,23 +118,81 @@ const AppRoutes = () => {
   );
 }
 
-const App: React.FC = () => {
+const AppContent: React.FC = () => {
+  const { user } = useAuth();
   const [shortlist, setShortlist] = useState<string[]>([]);
-  const toggleShortlist = (id: string) => {
-    setShortlist(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadShortlist = async () => {
+      if (!user) {
+        const local = window.localStorage.getItem('malawi_models_shortlist');
+        if (active) setShortlist(local ? JSON.parse(local) : []);
+        return;
+      }
+
+      const saved = await getSavedModelIds(user.uid).catch(() => []);
+      if (active) setShortlist(saved);
+    };
+
+    loadShortlist();
+    return () => {
+      active = false;
+    };
+  }, [user?.uid]);
+
+  const persistGuestShortlist = (next: string[]) => {
+    window.localStorage.setItem('malawi_models_shortlist', JSON.stringify(next));
   };
 
+  const toggleShortlist = (id: string) => {
+    setShortlist(prev => {
+      const shouldSave = !prev.includes(id);
+      const next = shouldSave ? [id, ...prev].slice(0, 100) : prev.filter(x => x !== id);
+
+      if (user) {
+        toggleSavedModel(user.uid, id, shouldSave).catch((error) => {
+          console.error('Failed to update saved model:', error);
+        });
+      } else {
+        persistGuestShortlist(next);
+      }
+
+      return next;
+    });
+  };
+
+  const clearShortlist = () => {
+    setShortlist([]);
+    if (user) {
+      clearSavedModels(user.uid).catch((error) => {
+        console.error('Failed to clear saved models:', error);
+      });
+    } else {
+      persistGuestShortlist([]);
+    }
+  };
+
+  return (
+    <ShortlistContext.Provider value={{ shortlist, toggleShortlist, clearShortlist }}>
+      <HashRouter>
+        <Layout>
+          <Suspense fallback={<PageLoader />}>
+            <AppRoutes />
+          </Suspense>
+        </Layout>
+      </HashRouter>
+    </ShortlistContext.Provider>
+  );
+};
+
+const App: React.FC = () => {
   return (
     <AuthProvider>
       <ThemeProvider>
         <NotificationProvider>
-          <ShortlistContext.Provider value={{ shortlist, toggleShortlist }}>
-            <HashRouter>
-              <Layout>
-                <AppRoutes />
-              </Layout>
-            </HashRouter>
-          </ShortlistContext.Provider>
+          <AppContent />
         </NotificationProvider>
       </ThemeProvider>
     </AuthProvider>

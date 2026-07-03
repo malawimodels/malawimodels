@@ -12,10 +12,9 @@ import AdminProjects from '../components/admin/AdminProjects';
 import AdminRequests from '../components/admin/AdminRequests';
 import AdminReports from '../components/admin/AdminReports';
 import AdminLeaveRequests from '../components/admin/AdminLeaveRequests';
-import { isAdminEmail } from '../config/admin';
 
 const Admin: React.FC = () => {
-  const { user, loading: authLoading } = useAuth();
+  const { user, role, loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'projects' | 'agency_requests' | 'reports' | 'leave_requests'>('overview');
@@ -44,7 +43,7 @@ const Admin: React.FC = () => {
   // Verify Admin Access - Only admin email can access
   useEffect(() => {
     if (!authLoading) {
-      if (!user || !isAdminEmail(user.email)) {
+      if (!user || role !== UserRole.ADMIN) {
         // Unauthorized access - redirect to home
         console.warn('Unauthorized admin access attempt:', user?.email);
         navigate('/');
@@ -52,7 +51,7 @@ const Admin: React.FC = () => {
         fetchData();
       }
     }
-  }, [user, authLoading, navigate]);
+  }, [user, role, authLoading, navigate]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -74,7 +73,7 @@ const Admin: React.FC = () => {
 
   // Real-time subscriptions - Only for admin
   useEffect(() => {
-    if (!user || !isAdminEmail(user.email)) return;
+    if (!user || role !== UserRole.ADMIN) return;
     
     // Agency Requests
     const unsubRequests = subscribeToAgencyRequests((newRequests) => {
@@ -90,7 +89,7 @@ const Admin: React.FC = () => {
       unsubRequests();
       unsubReports();
     };
-  }, [user]);
+  }, [user, role]);
 
   // --- Handlers ---
 

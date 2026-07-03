@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabase';
-import { createUserProfile, getUserRole } from '../services/supabase.service';
+import { createUserProfile, enforceRateLimit, getUserRole } from '../services/supabase.service';
 import { UserRole } from '../types';
 import { useAuth } from '../auth/AuthContext';
 import { Sparkles, User, Mail, Lock, Briefcase, Camera, LogIn } from 'lucide-react';
@@ -15,6 +15,8 @@ const Register: React.FC = () => {
   const { addNotification } = useNotification();
   const [loading, setLoading] = useState(false);
   const [isLogin, setIsLogin] = useState(false);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -28,6 +30,14 @@ const Register: React.FC = () => {
       setIsLogin(location.state.isLogin);
     }
   }, [location.state]);
+
+  useEffect(() => {
+    const href = window.location.href;
+    if (href.includes('type=recovery') || href.includes('reset=1')) {
+      setIsPasswordRecovery(true);
+      setIsLogin(true);
+    }
+  }, []);
 
   // Optional: Redirect if already logged in, but allowing manual auth for now
   useEffect(() => {
@@ -55,8 +65,25 @@ const Register: React.FC = () => {
     setLoading(true);
     
     try {
+      if (isPasswordRecovery) {
+        const { error } = await supabase.auth.updateUser({
+          password: formData.password,
+        });
+
+        if (error) throw error;
+        addNotification('success', 'Password updated successfully. Please log in with your new password.');
+        await supabase.auth.signOut();
+        setIsPasswordRecovery(false);
+        setIsLogin(true);
+        setFormData(prev => ({ ...prev, password: '' }));
+        navigate('/register', { replace: true, state: { isLogin: true } });
+        return;
+      }
+
       if (isLogin) {
         // --- LOGIN LOGIC ---
+        await enforceRateLimit('login_attempt', email, 8, 900);
+
         const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password: formData.password,
@@ -79,6 +106,8 @@ const Register: React.FC = () => {
           navigate('/agency-dashboard');
         } else if (fetchedRole === UserRole.CLIENT) {
           navigate('/client-dashboard');
+        } else if (fetchedRole === UserRole.ADMIN) {
+          navigate('/admin');
         } else {
           navigate('/');
         }
@@ -128,6 +157,28 @@ const Register: React.FC = () => {
     }
   };
 
+  const handlePasswordResetRequest = async () => {
+    const email = formData.email.trim();
+    if (!email) {
+      addNotification('error', 'Enter your email address first.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await enforceRateLimit('password_reset', email, 3, 3600);
+      const redirectTo = `${window.location.origin}${window.location.pathname}#/register?reset=1`;
+      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+      if (error) throw error;
+      setResetSent(true);
+      addNotification('success', 'Password reset link sent. Check your email.');
+    } catch (err: any) {
+      addNotification('error', err.message || 'Failed to send password reset link.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-brand-bg flex flex-col justify-center items-center p-4 relative overflow-hidden">
       {/* Background decoration */}
@@ -142,10 +193,10 @@ const Register: React.FC = () => {
             {isLogin ? <LogIn className="w-6 h-6 text-white" /> : <Sparkles className="w-6 h-6 text-white" />}
           </div>
           <h1 className="text-2xl font-bold text-white">
-            {isLogin ? "Welcome Back" : "Join Malawi Models"}
+            {isPasswordRecovery ? "Set New Password" : isLogin ? "Welcome Back" : "Join Malawi Models"}
           </h1>
           <p className="text-brand-muted mt-2 text-sm">
-            {isLogin ? "Enter your credentials to access your dashboard." : "Create an account to get started."}
+            {isPasswordRecovery ? "Enter a new password for your account." : isLogin ? "Enter your credentials to access your dashboard." : "Create an account to get started."}
           </p>
         </div>
 
@@ -176,6 +227,12 @@ const Register: React.FC = () => {
             </div>
           )}
 
+          {resetSent && (
+            <div className="p-3 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-sm">
+              Reset link sent. Open the link from your email to choose a new password.
+            </div>
+          )}
+
           <div className="space-y-4">
             {/* Name - Only for Registration */}
             {!isLogin && (
@@ -197,8 +254,9 @@ const Register: React.FC = () => {
                <input 
                  type="email" 
                  placeholder="Email Address"
-                 required
-                 className="w-full bg-black/20 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-white focus:outline-none focus:border-brand-primary transition-colors"
+                 required={!isPasswordRecovery}
+                 disabled={isPasswordRecovery}
+                 className="w-full bg-black/20 border border-white/10 rounded-xl py-3 pl-10 pr-4 text-white focus:outline-none focus:border-brand-primary transition-colors disabled:opacity-60"
                  value={formData.email}
                  onChange={(e) => setFormData({...formData, email: e.target.value})}
                />
@@ -218,6 +276,17 @@ const Register: React.FC = () => {
             </div>
           </div>
 
+          {isLogin && !isPasswordRecovery && (
+            <button
+              type="button"
+              onClick={handlePasswordResetRequest}
+              disabled={loading}
+              className="text-xs text-brand-primary hover:text-brand-accent transition-colors"
+            >
+              Forgot password?
+            </button>
+          )}
+
           <button 
             type="submit" 
             disabled={loading}
@@ -226,21 +295,22 @@ const Register: React.FC = () => {
              {loading ? (
                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
              ) : (
-               isLogin ? "Sign In" : "Create Account"
+               isPasswordRecovery ? "Update Password" : isLogin ? "Sign In" : "Create Account"
              )}
           </button>
         </form>
 
         <div className="mt-6 text-center pt-6 border-t border-white/5">
           <p className="text-brand-muted text-sm">
-            {isLogin ? "Don't have an account?" : "Already have an account?"}
+            {isPasswordRecovery ? "Remember your password?" : isLogin ? "Don't have an account?" : "Already have an account?"}
             <button 
               onClick={() => {
+                setIsPasswordRecovery(false);
                 setIsLogin(!isLogin);
               }}
               className="ml-2 text-brand-primary hover:text-brand-accent font-bold transition-colors"
             >
-              {isLogin ? "Sign Up" : "Sign In"}
+              {isPasswordRecovery ? "Sign In" : isLogin ? "Sign Up" : "Sign In"}
             </button>
           </p>
         </div>

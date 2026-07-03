@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { ShortlistContext } from '../App';
-import { getModelProfile, subscribeToClientProjects, inviteModelToProject } from '../services/supabase.service';
+import { getModelsByIds, subscribeToClientProjects, inviteModelToProject } from '../services/supabase.service';
 import { ModelProfile, Project, UserRole, ProjectStatus } from '../types';
 import ModelCard from '../components/ModelCard';
 import { Heart, Briefcase, CheckCircle, X, Loader } from 'lucide-react';
@@ -11,7 +11,7 @@ import { useNavigate } from 'react-router-dom';
 import { useNotification } from '../components/NotificationSystem';
 
 const Shortlist: React.FC = () => {
-  const { shortlist, toggleShortlist } = useContext(ShortlistContext);
+  const { shortlist, clearShortlist } = useContext(ShortlistContext);
   const { user, role } = useAuth();
   const navigate = useNavigate();
   const { addNotification } = useNotification();
@@ -31,10 +31,7 @@ const Shortlist: React.FC = () => {
       setLoading(true);
       if (shortlist.length > 0) {
         try {
-          // Fetch all models in parallel
-          const promises = shortlist.map(uid => getModelProfile(uid));
-          const results = await Promise.all(promises);
-          setModels(results.filter(m => m !== null) as ModelProfile[]);
+          setModels(await getModelsByIds(shortlist));
         } catch (error) {
           console.error("Error fetching shortlisted models", error);
         }
@@ -105,7 +102,7 @@ const Shortlist: React.FC = () => {
         </div>
         {models.length > 0 && (
            <button 
-             onClick={() => models.forEach(m => toggleShortlist(m.uid))}
+             onClick={clearShortlist}
              className="px-4 py-2 bg-white/5 hover:bg-red-500/10 hover:text-red-500 text-brand-muted rounded-lg text-sm transition-colors"
            >
              Clear All

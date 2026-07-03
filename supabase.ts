@@ -1,21 +1,30 @@
 import { createClient } from '@supabase/supabase-js';
 
 // Supabase configuration
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+export const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+export const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase environment variables. Please check .env.local');
 }
 
+const globalForSupabase = globalThis as typeof globalThis & {
+  __malawiModelsSupabase?: ReturnType<typeof createClient>;
+};
+
 // Create Supabase client
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+export const supabase = globalForSupabase.__malawiModelsSupabase ?? createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
+    storageKey: 'malawimodels-auth-token',
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: true,
   },
 });
+
+if (import.meta.env.DEV) {
+  globalForSupabase.__malawiModelsSupabase = supabase;
+}
 
 // Helper function to get current user
 export const getCurrentUser = () => {

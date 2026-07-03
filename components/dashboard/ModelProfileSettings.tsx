@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { ModelProfile, District, Gender, SkinTone, Category } from '../../types';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ModelProfile, District, Gender, SkinTone, Category, AvailabilityBlock, NotificationPreferences } from '../../types';
 import {
     Save,
     DollarSign,
@@ -16,8 +16,16 @@ import {
     Calendar,
 } from 'lucide-react';
 import { uploadImage } from '../../services/cloudinary';
+import {
+    deleteModelAvailabilityBlock,
+    getModelAvailabilityBlocks,
+    getNotificationPreferences,
+    saveModelAvailabilityBlock,
+    updateNotificationPreferences,
+} from '../../services/supabase.service';
 import AppearanceSettings from '../AppearanceSettings';
 import OptimizedImage from '../OptimizedImage';
+import { useNotification } from '../NotificationSystem';
 
 interface ModelProfileSettingsProps {
     profile: ModelProfile;
@@ -162,10 +170,89 @@ const ModelProfileSettings: React.FC<ModelProfileSettingsProps> = ({ profile, se
     const [uploadError, setUploadError] = useState('');
     const [detectingLocation, setDetectingLocation] = useState(false);
     const [locationQuery, setLocationQuery] = useState(formatLocationValue(profile));
+    const [availabilityBlocks, setAvailabilityBlocks] = useState<AvailabilityBlock[]>([]);
+    const [newBlock, setNewBlock] = useState({ startDate: '', endDate: '', reason: '' });
+    const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences | null>(null);
+    const [settingsBusy, setSettingsBusy] = useState(false);
+    const { addNotification } = useNotification();
 
     const heightInches = cmToInches(profile.height);
     const ageEnabled = Boolean(profile.age);
     const nameLock = useMemo(() => getDisplayNameLock(profile.displayNameChangedAt), [profile.displayNameChangedAt]);
+
+    useEffect(() => {
+        let active = true;
+
+        const loadSettings = async () => {
+            const [blocks, preferences] = await Promise.all([
+                getModelAvailabilityBlocks(profile.uid).catch(() => []),
+                getNotificationPreferences(profile.uid).catch(() => null),
+            ]);
+
+            if (!active) return;
+            setAvailabilityBlocks(blocks);
+            setNotificationPreferences(preferences || {
+                userId: profile.uid,
+                inAppEnabled: true,
+                emailEnabled: true,
+                projectUpdates: true,
+                bookingUpdates: true,
+                agencyUpdates: true,
+                marketingEmails: false,
+            });
+        };
+
+        loadSettings();
+        return () => {
+            active = false;
+        };
+    }, [profile.uid]);
+
+    const addAvailabilityBlock = async () => {
+        if (!newBlock.startDate || !newBlock.endDate) {
+            addNotification('error', 'Choose start and end dates for the unavailable period.');
+            return;
+        }
+
+        setSettingsBusy(true);
+        try {
+            await saveModelAvailabilityBlock(profile.uid, newBlock);
+            setAvailabilityBlocks(await getModelAvailabilityBlocks(profile.uid));
+            setNewBlock({ startDate: '', endDate: '', reason: '' });
+            addNotification('success', 'Availability updated.');
+        } catch (error) {
+            console.error(error);
+            addNotification('error', 'Could not save availability.');
+        } finally {
+            setSettingsBusy(false);
+        }
+    };
+
+    const removeAvailabilityBlock = async (blockId: string) => {
+        setSettingsBusy(true);
+        try {
+            await deleteModelAvailabilityBlock(blockId);
+            setAvailabilityBlocks(blocks => blocks.filter(block => block.id !== blockId));
+            addNotification('success', 'Availability block removed.');
+        } catch (error) {
+            console.error(error);
+            addNotification('error', 'Could not remove availability block.');
+        } finally {
+            setSettingsBusy(false);
+        }
+    };
+
+    const saveNotificationPreference = async (key: keyof Omit<NotificationPreferences, 'userId' | 'updatedAt'>, value: boolean) => {
+        const next = { ...(notificationPreferences || { userId: profile.uid }), [key]: value } as NotificationPreferences;
+        setNotificationPreferences(next);
+
+        try {
+            await updateNotificationPreferences(profile.uid, { [key]: value });
+        } catch (error) {
+            console.error(error);
+            addNotification('error', 'Could not save notification preference.');
+        }
+    };
 
     const updateLocation = (value: string) => {
         setLocationQuery(value);
@@ -512,6 +599,81 @@ const ModelProfileSettings: React.FC<ModelProfileSettingsProps> = ({ profile, se
 
             <div className="space-y-6">
                 <AppearanceSettings />
+
+                <div className="bg-brand-surface p-6 rounded-2xl border border-white/5">
+                    <h3 className="text-lg font-bold text-white mb-4 flex items-center"><Calendar className="w-5 h-5 mr-2 text-brand-primary" /> Unavailable Dates</h3>
+                    <div className="space-y-3">
+                        <input
+                            type="date"
+                            className="w-full bg-black/20 border border-white/10 rounded-lg p-3 text-white focus:border-brand-primary focus:outline-none"
+                            value={newBlock.startDate}
+                            onChange={(e) => setNewBlock({ ...newBlock, startDate: e.target.value })}
+                        />
+                        <input
+                            type="date"
+                            className="w-full bg-black/20 border border-white/10 rounded-lg p-3 text-white focus:border-brand-primary focus:outline-none"
+                            value={newBlock.endDate}
+                            onChange={(e) => setNewBlock({ ...newBlock, endDate: e.target.value })}
+                        />
+                        <input
+                            type="text"
+                            className="w-full bg-black/20 border border-white/10 rounded-lg p-3 text-white focus:border-brand-primary focus:outline-none"
+                            placeholder="Reason, optional"
+                            value={newBlock.reason}
+                            onChange={(e) => setNewBlock({ ...newBlock, reason: e.target.value })}
+                        />
+                        <button
+                            type="button"
+                            onClick={addAvailabilityBlock}
+                            disabled={settingsBusy}
+                            className="w-full px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-sm font-bold rounded-lg disabled:opacity-50"
+                        >
+                            Add Dates
+                        </button>
+                    </div>
+
+                    {availabilityBlocks.length > 0 && (
+                        <div className="mt-4 space-y-2">
+                            {availabilityBlocks.slice(0, 5).map((block) => (
+                                <div key={block.id} className="flex items-center justify-between gap-3 rounded-lg bg-black/20 border border-white/10 p-3">
+                                    <div>
+                                        <p className="text-xs font-bold text-white">{block.startDate} to {block.endDate}</p>
+                                        {block.reason && <p className="text-[11px] text-brand-muted mt-1">{block.reason}</p>}
+                                    </div>
+                                    <button type="button" onClick={() => removeAvailabilityBlock(block.id)} disabled={settingsBusy} className="text-red-400 hover:text-red-300 disabled:opacity-50">
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {notificationPreferences && (
+                    <div className="bg-brand-surface p-6 rounded-2xl border border-white/5">
+                        <h3 className="text-lg font-bold text-white mb-4">Notifications</h3>
+                        <div className="space-y-3">
+                            {([
+                                ['inAppEnabled', 'In-app notifications'],
+                                ['emailEnabled', 'Email notifications'],
+                                ['projectUpdates', 'Project updates'],
+                                ['bookingUpdates', 'Booking updates'],
+                                ['agencyUpdates', 'Agency updates'],
+                                ['marketingEmails', 'Marketing emails'],
+                            ] as const).map(([key, label]) => (
+                                <label key={key} className="flex items-center justify-between gap-3 text-sm text-brand-muted">
+                                    <span>{label}</span>
+                                    <input
+                                        type="checkbox"
+                                        className="h-4 w-4 accent-brand-primary"
+                                        checked={Boolean(notificationPreferences[key])}
+                                        onChange={(e) => saveNotificationPreference(key, e.target.checked)}
+                                    />
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 <div className="bg-brand-surface p-6 rounded-2xl border border-white/5">
                     <h3 className="text-lg font-bold text-white mb-4 flex items-center"><Info className="w-5 h-5 mr-2 text-brand-muted" /> Profile Tips</h3>

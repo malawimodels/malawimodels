@@ -7,6 +7,30 @@ export enum UserRole {
   ADMIN = 'admin'
 }
 
+export type AdminPermissionRole = 'owner' | 'admin' | 'moderator' | 'support' | 'finance';
+
+export interface AdminPermission {
+  id: string;
+  userId: string;
+  role: AdminPermissionRole;
+  permissions: Record<string, boolean>;
+  isActive: boolean;
+  grantedBy?: string;
+  grantedAt: string;
+  revokedAt?: string;
+}
+
+export interface AdminAuditLog {
+  id: string;
+  actionType: string;
+  adminUserId?: string;
+  targetUserId?: string;
+  targetTable?: string;
+  targetId?: string;
+  details: Record<string, any>;
+  createdAt: string;
+}
+
 export enum District {
   LILONGWE = 'Lilongwe',
   BLANTYRE = 'Blantyre',
@@ -101,6 +125,34 @@ export interface UserData {
   gallery?: string[];
   website?: string;
   customLinks?: SocialLink[]; // Dynamic social links
+}
+
+export interface SavedModel {
+  id: string;
+  userId: string;
+  modelId: string;
+  note?: string;
+  createdAt: string;
+}
+
+export interface NotificationPreferences {
+  userId: string;
+  inAppEnabled: boolean;
+  emailEnabled: boolean;
+  projectUpdates: boolean;
+  bookingUpdates: boolean;
+  agencyUpdates: boolean;
+  marketingEmails: boolean;
+  updatedAt: string;
+}
+
+export interface AvailabilityBlock {
+  id: string;
+  modelId: string;
+  startDate: string;
+  endDate: string;
+  reason?: string;
+  createdAt: string;
 }
 
 export interface ModelProfile {
@@ -286,6 +338,15 @@ export interface SearchFilters {
   locations: District[];
   minHeight: number;
   maxHeight: number;
+  minAge?: number;
+  maxAge?: number;
+  minRate?: number;
+  maxRate?: number;
+  availabilityDate?: string;
+  verifiedOnly?: boolean;
+  agencyRepresented?: boolean | null;
+  page?: number;
+  limit?: number;
   gender: Gender | null;
   skinTones: SkinTone[];
   onlyAvailable: boolean;
@@ -357,6 +418,63 @@ export interface Booking {
   // Safe Deletion / Archiving
   hiddenBy?: string[];
   blockedBy?: string[];
+}
+
+export type ContractDocumentType = 'booking_agreement' | 'model_release' | 'agency_agreement';
+export type BookingAgreementStatus = 'draft' | 'sent' | 'accepted' | 'declined' | 'void';
+
+export interface ContractTemplate {
+  id: string;
+  name: string;
+  documentType: ContractDocumentType;
+  body: string;
+  version: number;
+  isActive: boolean;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BookingAgreement {
+  id: string;
+  bookingId: string;
+  templateId?: string;
+  documentType: 'booking_agreement' | 'model_release';
+  status: BookingAgreementStatus;
+  documentSnapshot: string;
+  clientAcceptedAt?: string;
+  modelAcceptedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type DisputeStatus = 'open' | 'under_review' | 'resolved' | 'dismissed';
+
+export interface Dispute {
+  id: string;
+  bookingId?: string;
+  openedBy?: string;
+  againstUserId?: string;
+  status: DisputeStatus;
+  reason: string;
+  details?: string;
+  adminDecision?: string;
+  resolvedBy?: string;
+  resolvedAt?: string;
+  deletedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DisputeEvidence {
+  id: string;
+  disputeId: string;
+  uploadedBy?: string;
+  cloudinaryUrl?: string;
+  cloudinaryPublicId?: string;
+  note?: string;
+  createdAt: string;
+  deletedAt?: string;
 }
 
 // --- REPORTING & ADMIN TYPES ---

@@ -1,10 +1,9 @@
 
-import React, { useContext, useState, useEffect } from 'react';
-import { ModelProfile, UserData } from '../types';
+import React, { useContext } from 'react';
+import { ModelProfile } from '../types';
 import { Link } from 'react-router-dom';
 import { Heart, MapPin, CheckCircle, ArrowRight, Building, Star } from 'lucide-react';
 import { ShortlistContext } from '../App';
-import { getUserData } from '../services/supabase.service';
 import OptimizedImage from './OptimizedImage';
 
 interface ModelCardProps {
@@ -13,15 +12,9 @@ interface ModelCardProps {
 
 const ModelCard: React.FC<ModelCardProps> = ({ model }) => {
   const { shortlist, toggleShortlist } = useContext(ShortlistContext);
-  const [userData, setUserData] = useState<UserData | null>(null);
   
   const isShortlisted = shortlist.includes(model.uid);
   const imageSrc = model.media?.images?.[0] || 'https://via.placeholder.com/400x600?text=No+Image';
-
-  // Fetch user data to show rating
-  useEffect(() => {
-      getUserData(model.uid).then(setUserData);
-  }, [model.uid]);
 
   return (
     <div className="group relative w-full break-inside-avoid mb-6">
@@ -86,11 +79,11 @@ const ModelCard: React.FC<ModelCardProps> = ({ model }) => {
                     </div>
                   )}
                   {/* RATING DISPLAY */}
-                  {userData?.averageRating ? (
+                    {model.averageRating ? (
                       <div className="flex items-center mt-2 bg-brand-primary/10 w-fit px-2 py-0.5 rounded backdrop-blur-sm">
                           <Star className="w-3 h-3 text-brand-primary fill-brand-primary mr-1" />
-                          <span className="text-xs font-bold text-brand-primary">{userData.averageRating.toFixed(1)}</span>
-                          <span className="text-[10px] text-brand-muted ml-1">({userData.reviewsCount})</span>
+                        <span className="text-xs font-bold text-brand-primary">{model.averageRating.toFixed(1)}</span>
+                        <span className="text-[10px] text-brand-muted ml-1">({model.reviewsCount})</span>
                       </div>
                   ) : null}
                 </div>

@@ -9,7 +9,9 @@ import {
   SearchFilters, Category, District, ProjectStatus, 
   ProjectVisibility, BookingStatus,
   ReportReason, NotificationType, ReportStatus,
-  AgencyApplication, LeaveRequest
+  AgencyApplication, LeaveRequest, AdminPermission, AvailabilityBlock,
+  NotificationPreferences, ContractTemplate, BookingAgreement, Dispute,
+  DisputeEvidence
 } from '../types';
 import { getPublicIdFromUrl } from './cloudinary';
 
@@ -20,6 +22,27 @@ const isMissingColumnError = (error: any, columnName: string): boolean => {
 
 const getCloudinaryPublicId = (url: string, fallback: string): string => {
   return getPublicIdFromUrl(url) || fallback;
+};
+
+const isMissingRelationError = (error: any, relationName: string): boolean => {
+  const message = `${error?.message || ''} ${error?.details || ''}`.toLowerCase();
+  return message.includes(relationName.toLowerCase()) && (
+    message.includes('does not exist') ||
+    message.includes('not found') ||
+    message.includes('could not find') ||
+    message.includes('schema cache')
+  );
+};
+
+const optionalHardeningSchemaEnabled = import.meta.env.VITE_ENABLE_HARDENING_SCHEMA === 'true';
+
+const hasOptionalRelation = async (_relationName: string): Promise<boolean> => optionalHardeningSchemaEnabled;
+
+const hasOptionalRpc = async (_functionName: string): Promise<boolean> => optionalHardeningSchemaEnabled;
+
+const getCurrentAuthUserId = async (): Promise<string | null> => {
+  const { data: { user } } = await supabase.auth.getUser();
+  return user?.id || null;
 };
 
 const retryWithoutMissingColumn = async <T extends Record<string, any>>(
@@ -62,6 +85,112 @@ const assertDisplayNameCanChange = async (
 
   if ((data?.display_name || '').trim() === normalizedNext) return null;
   return null;
+};
+
+// =====================================================
+// SECURITY, ADMIN PERMISSIONS & RATE LIMITS
+// =====================================================
+
+const transformAdminPermission = (data: any): AdminPermission => ({
+  id: data.id,
+  userId: data.user_id,
+  role: data.role,
+  permissions: data.permissions || {},
+  isActive: data.is_active,
+  grantedBy: data.granted_by || undefined,
+  grantedAt: data.granted_at,
+  revokedAt: data.revoked_at || undefined,
+});
+
+export const getAdminPermission = async (userId: string): Promise<AdminPermission | null> => {
+  if (!userId) return null;
+  if (!(await hasOptionalRelation('admin_permissions'))) return null;
+
+  const { data, error } = await supabase
+    .from('admin_permissions')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .is('revoked_at', null)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingRelationError(error, 'admin_permissions')) return null;
+    console.error('Error fetching admin permission:', error);
+    return null;
+  }
+
+  return data ? transformAdminPermission(data) : null;
+};
+
+export const isPlatformAdmin = async (userId: string): Promise<boolean> => {
+  const permission = await getAdminPermission(userId);
+  return Boolean(permission);
+};
+
+export const checkRateLimit = async (
+  scope: string,
+  identifier: string,
+  maxAttempts: number,
+  windowSeconds: number
+): Promise<boolean> => {
+  if (!identifier) return false;
+  if (!(await hasOptionalRpc('check_rate_limit'))) return true;
+
+  const { data, error } = await supabase.rpc('check_rate_limit', {
+    p_scope: scope,
+    p_identifier: identifier.toLowerCase().trim(),
+    p_max_attempts: maxAttempts,
+    p_window_seconds: windowSeconds,
+  });
+
+  if (error) {
+    if (isMissingRelationError(error, 'check_rate_limit') || `${error.message || ''}`.includes('function')) {
+      return true;
+    }
+    throw error;
+  }
+
+  return data === true;
+};
+
+export const enforceRateLimit = async (
+  scope: string,
+  identifier: string,
+  maxAttempts: number,
+  windowSeconds: number
+): Promise<void> => {
+  const allowed = await checkRateLimit(scope, identifier, maxAttempts, windowSeconds);
+  if (!allowed) {
+    throw new Error('Too many attempts. Please wait a bit and try again.');
+  }
+};
+
+export const logAdminAction = async (action: {
+  actionType: string;
+  targetUserId?: string;
+  targetTable?: string;
+  targetId?: string;
+  details?: Record<string, any>;
+}): Promise<void> => {
+  if (!(await hasOptionalRelation('admin_audit_logs'))) return;
+
+  const adminUserId = await getCurrentAuthUserId();
+  if (!adminUserId) return;
+
+  const { error } = await supabase.from('admin_audit_logs').insert({
+    action_type: action.actionType,
+    admin_user_id: adminUserId,
+    target_user_id: action.targetUserId,
+    target_table: action.targetTable,
+    target_id: action.targetId,
+    details: action.details || {},
+  });
+
+  if (error) {
+    if (isMissingRelationError(error, 'admin_audit_logs')) return;
+    console.warn('Failed to write admin audit log:', error);
+  }
 };
 
 // =====================================================
@@ -120,18 +249,21 @@ export const createUserProfile = async (
 };
 
 export const getUserRole = async (uid: string): Promise<UserRole | null> => {
+  const adminPermission = await getAdminPermission(uid);
+  if (adminPermission) return UserRole.ADMIN;
+
   const { data, error } = await supabase
     .from('users')
     .select('role')
     .eq('id', uid)
-    .single();
+    .limit(1);
 
   if (error) {
     console.error('Error fetching role:', error);
     return null;
   }
 
-  return data?.role as UserRole;
+  return data?.[0]?.role as UserRole | null;
 };
 
 export const getUserData = async (uid: string): Promise<UserData | null> => {
@@ -201,15 +333,12 @@ export const updateUserData = async (
   const displayNameChangedAt = await assertDisplayNameCanChange(uid, updates.displayName);
 
   if (updates.email !== undefined) dbUpdates.email = updates.email;
-  if (updates.role !== undefined) dbUpdates.role = updates.role;
   if (updates.displayName !== undefined) {
     dbUpdates.display_name = updates.displayName.trim();
     if (displayNameChangedAt) dbUpdates.display_name_changed_at = displayNameChangedAt;
   }
   if (updates.photoUrl !== undefined) dbUpdates.photo_url = updates.photoUrl;
   if (updates.bio !== undefined) dbUpdates.bio = updates.bio;
-  if (updates.verified !== undefined) dbUpdates.verified = updates.verified;
-  if (updates.isActive !== undefined) dbUpdates.is_active = updates.isActive;
   if (updates.website !== undefined) dbUpdates.website = updates.website;
   if (updates.contact?.publicEmail !== undefined) dbUpdates.public_email = updates.contact.publicEmail;
   if (updates.contact?.whatsapp !== undefined) dbUpdates.whatsapp = updates.contact.whatsapp;
@@ -272,6 +401,13 @@ export const toggleUserVerification = async (
     .eq('id', uid);
 
   if (error) throw error;
+  await logAdminAction({
+    actionType: verified ? 'user_verified' : 'user_unverified',
+    targetUserId: uid,
+    targetTable: 'users',
+    targetId: uid,
+    details: { verified, role: _role },
+  });
 };
 
 export const toggleUserStatus = async (
@@ -284,13 +420,38 @@ export const toggleUserStatus = async (
     .eq('id', uid);
 
   if (error) throw error;
+  await logAdminAction({
+    actionType: isActive ? 'user_unblocked' : 'user_blocked',
+    targetUserId: uid,
+    targetTable: 'users',
+    targetId: uid,
+    details: { isActive },
+  });
 };
 
 export const deleteUserPermanently = async (uid: string, _role?: UserRole): Promise<void> => {
-  // Supabase will handle cascading deletes via foreign keys
-  const { error } = await supabase.from('users').delete().eq('id', uid);
+  const { data: user } = await supabase
+    .from('users')
+    .select('deletion_count')
+    .eq('id', uid)
+    .maybeSingle();
+
+  const { error } = await supabase
+    .from('users')
+    .update({
+      is_active: false,
+      deletion_count: (user?.deletion_count || 0) + 1,
+    })
+    .eq('id', uid);
 
   if (error) throw error;
+  await logAdminAction({
+    actionType: 'user_soft_deleted',
+    targetUserId: uid,
+    targetTable: 'users',
+    targetId: uid,
+    details: { previousRole: _role },
+  });
 };
 
 export const sendAdminWarning = async (
@@ -318,6 +479,14 @@ export const sendAdminWarning = async (
     title: 'Warning from Administration',
     message,
     link: '/help',
+  });
+
+  await logAdminAction({
+    actionType: 'user_warning_sent',
+    targetUserId: userId,
+    targetTable: 'users',
+    targetId: userId,
+    details: { message, warningCount: newWarningCount },
   });
 };
 
@@ -376,6 +545,82 @@ export const getModelProfile = async (
   return transformModelData(withUser);
 };
 
+export const getModelsByIds = async (modelIds: string[]): Promise<ModelProfile[]> => {
+  const uniqueIds = Array.from(new Set(modelIds.filter(Boolean)));
+  if (uniqueIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('models')
+    .select(`
+      *,
+      model_categories (category),
+      model_pricing (category, price),
+      model_images (cloudinary_url, display_order)
+    `)
+    .in('id', uniqueIds)
+    .limit(Math.min(uniqueIds.length, 100));
+
+  if (error) throw error;
+
+  const withUsers = await attachUsersToModels(data || []);
+  const modelsById = new Map(withUsers.map((model: any) => [model.id, transformModelData(model)]));
+  return uniqueIds.map((id) => modelsById.get(id)).filter(Boolean) as ModelProfile[];
+};
+
+export const getSavedModelIds = async (userId: string): Promise<string[]> => {
+  if (!(await hasOptionalRelation('saved_models'))) return [];
+
+  const { data, error } = await supabase
+    .from('saved_models')
+    .select('model_id')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(100);
+
+  if (error) {
+    if (isMissingRelationError(error, 'saved_models')) return [];
+    throw error;
+  }
+
+  return (data || []).map((row: any) => row.model_id);
+};
+
+export const toggleSavedModel = async (
+  userId: string,
+  modelId: string,
+  shouldSave: boolean
+): Promise<void> => {
+  if (!(await hasOptionalRelation('saved_models'))) return;
+
+  if (shouldSave) {
+    const { error } = await supabase.from('saved_models').upsert(
+      { user_id: userId, model_id: modelId },
+      { onConflict: 'user_id,model_id' }
+    );
+    if (error) throw error;
+    return;
+  }
+
+  const { error } = await supabase
+    .from('saved_models')
+    .delete()
+    .eq('user_id', userId)
+    .eq('model_id', modelId);
+
+  if (error) throw error;
+};
+
+export const clearSavedModels = async (userId: string): Promise<void> => {
+  if (!(await hasOptionalRelation('saved_models'))) return;
+
+  const { error } = await supabase
+    .from('saved_models')
+    .delete()
+    .eq('user_id', userId);
+
+  if (error) throw error;
+};
+
 export const subscribeToSearchModels = (
   filters: SearchFilters,
   callback: (models: ModelProfile[]) => void
@@ -389,6 +634,7 @@ export const subscribeToSearchModels = (
         .select(`
           *,
           model_categories (category),
+          model_pricing (category, price),
           model_images (cloudinary_url, display_order)
         `);
 
@@ -418,22 +664,70 @@ export const subscribeToSearchModels = (
         query = query.lte('height', filters.maxHeight);
       }
 
+      if (filters.minAge) {
+        query = query.gte('age', filters.minAge);
+      }
+
+      if (filters.maxAge) {
+        query = query.lte('age', filters.maxAge);
+      }
+
+      if (filters.agencyRepresented === true) {
+        query = query.not('agency_id', 'is', null);
+      } else if (filters.agencyRepresented === false) {
+        query = query.is('agency_id', null);
+      }
+
       if (filters.onlyAvailable) {
         query = query.eq('availability', true);
       }
 
       // Order by ranking score
       query = query.order('ranking_score', { ascending: false });
+      query = query.range(
+        ((filters.page || 0) * (filters.limit || 48)),
+        ((filters.page || 0) * (filters.limit || 48)) + (filters.limit || 48) - 1
+      );
 
       const { data, error } = await query;
 
       if (error) throw error;
 
       const withUsers = await attachUsersToModels(data || []);
-      // Only show models whose user account is active
-      const activeModels = withUsers.filter(
+      let activeModels = withUsers.filter(
         (m) => m.users && m.users.is_active !== false
       );
+
+      if (filters.verifiedOnly) {
+        activeModels = activeModels.filter((m) => m.users?.verified === true);
+      }
+
+      if (filters.minRate || filters.maxRate) {
+        activeModels = activeModels.filter((m) => {
+          const prices = (m.model_pricing || []).map((price: any) => Number(price.price || 0));
+          if (prices.length === 0) return false;
+          const minPrice = Math.min(...prices);
+          const maxPrice = Math.max(...prices);
+          if (filters.minRate && maxPrice < filters.minRate) return false;
+          if (filters.maxRate && minPrice > filters.maxRate) return false;
+          return true;
+        });
+      }
+
+      if (filters.availabilityDate && activeModels.length > 0 && await hasOptionalRelation('model_availability_blocks')) {
+        const modelIds = activeModels.map((m) => m.id);
+        const { data: blocks, error: blockError } = await supabase
+          .from('model_availability_blocks')
+          .select('model_id')
+          .in('model_id', modelIds)
+          .lte('start_date', filters.availabilityDate)
+          .gte('end_date', filters.availabilityDate);
+
+        if (!blockError) {
+          const unavailable = new Set((blocks || []).map((block: any) => block.model_id));
+          activeModels = activeModels.filter((m) => !unavailable.has(m.id));
+        }
+      }
 
       if (active) {
         callback(activeModels.map(transformModelData));
@@ -448,8 +742,9 @@ export const subscribeToSearchModels = (
   fetchModels();
 
   // Subscribe to changes
+  const channelName = `models_search_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const subscription = supabase
-    .channel('models_search')
+    .channel(channelName)
     .on(
       'postgres_changes',
       {
@@ -465,7 +760,7 @@ export const subscribeToSearchModels = (
 
   return () => {
     active = false;
-    subscription.unsubscribe();
+    supabase.removeChannel(subscription);
   };
 };
 
@@ -666,26 +961,17 @@ export const updateModelProfile = async (
 };
 
 export const incrementModelViews = async (uid: string): Promise<void> => {
-  const { error } = await supabase.rpc('increment', {
-    table_name: 'models',
-    row_id: uid,
-    column_name: 'views',
-  });
+  const { data } = await supabase
+    .from('models')
+    .select('views')
+    .eq('id', uid)
+    .single();
 
-  if (error) {
-    // Fallback: manual increment
-    const { data } = await supabase
+  if (data) {
+    await supabase
       .from('models')
-      .select('views')
-      .eq('id', uid)
-      .single();
-
-    if (data) {
-      await supabase
-        .from('models')
-        .update({ views: data.views + 1 })
-        .eq('id', uid);
-    }
+      .update({ views: (data.views || 0) + 1 })
+      .eq('id', uid);
   }
 };
 
@@ -871,6 +1157,14 @@ export const approveAgencyRequest = async (requestOrId: string | AgencyRequest):
     message: `Your agency "${request.agency_name}" has been approved!`,
     link: '/agency-dashboard',
   });
+
+  await logAdminAction({
+    actionType: 'agency_request_approved',
+    targetUserId: request.applicant_id,
+    targetTable: 'agency_requests',
+    targetId: requestId,
+    details: { agencyName: request.agency_name },
+  });
 };
 
 export const rejectAgencyRequest = async (requestId: string): Promise<void> => {
@@ -896,6 +1190,14 @@ export const rejectAgencyRequest = async (requestId: string): Promise<void> => {
       title: 'Agency Application Rejected',
       message: 'Your agency registration request was not approved.',
       link: '/help',
+    });
+
+    await logAdminAction({
+      actionType: 'agency_request_rejected',
+      targetUserId: request.applicant_id,
+      targetTable: 'agency_requests',
+      targetId: requestId,
+      details: { agencyName: request.agency_name },
     });
   }
 };
@@ -1293,15 +1595,26 @@ export const updateProject = async (
 };
 
 export const deleteProject = async (projectId: string): Promise<void> => {
-  const { error } = await supabase.from('projects').delete().eq('id', projectId);
+  await retryWithoutMissingColumn(
+    (updates) => supabase.from('projects').update(updates).eq('id', projectId),
+    { deleted_at: new Date().toISOString(), status: ProjectStatus.CANCELLED },
+    'deleted_at'
+  );
 
-  if (error) throw error;
+  await logAdminAction({
+    actionType: 'project_soft_deleted',
+    targetTable: 'projects',
+    targetId: projectId,
+    details: { status: ProjectStatus.CANCELLED },
+  });
 };
 
 export const applyToProject = async (
   projectId: string,
   modelId: string
 ): Promise<void> => {
+  await enforceRateLimit('project_application', modelId, 20, 3600);
+
   const { error } = await supabase.from('project_applications').insert({
     project_id: projectId,
     model_id: modelId,
@@ -1423,6 +1736,11 @@ export const inviteModelToProject = async (
   projectId: string,
   modelId: string
 ): Promise<void> => {
+  const actorId = await getCurrentAuthUserId();
+  if (actorId) {
+    await enforceRateLimit('project_invitation', actorId, 50, 3600);
+  }
+
   const { error } = await supabase.from('project_invitations').insert({
     project_id: projectId,
     model_id: modelId,
@@ -1803,6 +2121,8 @@ export const submitReport = async (reportOrReporterId: {
     throw new Error('Missing report details');
   }
 
+  await enforceRateLimit('report_submission', report.reporterId, 5, 3600);
+
   const { error } = await supabase.from('reports').insert({
     reporter_id: report.reporterId,
     reporter_role: report.reporterRole,
@@ -1892,6 +2212,313 @@ export const updateReportStatus = async (
     .eq('id', reportId);
 
   if (error) throw error;
+
+  await logAdminAction({
+    actionType: 'report_status_updated',
+    targetTable: 'reports',
+    targetId: reportId,
+    details: { status },
+  });
+};
+
+// =====================================================
+// NOTIFICATION PREFERENCES, AVAILABILITY, AGREEMENTS & DISPUTES
+// =====================================================
+
+export const getNotificationPreferences = async (userId: string): Promise<NotificationPreferences | null> => {
+  if (!(await hasOptionalRelation('notification_preferences'))) return null;
+
+  const { data, error } = await supabase
+    .from('notification_preferences')
+    .select('*')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingRelationError(error, 'notification_preferences')) return null;
+    throw error;
+  }
+
+  if (!data) return null;
+  return {
+    userId: data.user_id,
+    inAppEnabled: data.in_app_enabled,
+    emailEnabled: data.email_enabled,
+    projectUpdates: data.project_updates,
+    bookingUpdates: data.booking_updates,
+    agencyUpdates: data.agency_updates,
+    marketingEmails: data.marketing_emails,
+    updatedAt: data.updated_at,
+  };
+};
+
+export const updateNotificationPreferences = async (
+  userId: string,
+  updates: Partial<Omit<NotificationPreferences, 'userId' | 'updatedAt'>>
+): Promise<void> => {
+  if (!(await hasOptionalRelation('notification_preferences'))) return;
+
+  const payload: any = { user_id: userId, updated_at: new Date().toISOString() };
+  if (updates.inAppEnabled !== undefined) payload.in_app_enabled = updates.inAppEnabled;
+  if (updates.emailEnabled !== undefined) payload.email_enabled = updates.emailEnabled;
+  if (updates.projectUpdates !== undefined) payload.project_updates = updates.projectUpdates;
+  if (updates.bookingUpdates !== undefined) payload.booking_updates = updates.bookingUpdates;
+  if (updates.agencyUpdates !== undefined) payload.agency_updates = updates.agencyUpdates;
+  if (updates.marketingEmails !== undefined) payload.marketing_emails = updates.marketingEmails;
+
+  const { error } = await supabase
+    .from('notification_preferences')
+    .upsert(payload, { onConflict: 'user_id' });
+
+  if (error) throw error;
+};
+
+export const getModelAvailabilityBlocks = async (
+  modelId: string,
+  fromDate?: string,
+  toDate?: string
+): Promise<AvailabilityBlock[]> => {
+  if (!(await hasOptionalRelation('model_availability_blocks'))) return [];
+
+  let query = supabase
+    .from('model_availability_blocks')
+    .select('*')
+    .eq('model_id', modelId)
+    .order('start_date', { ascending: true })
+    .limit(120);
+
+  if (fromDate) query = query.gte('end_date', fromDate);
+  if (toDate) query = query.lte('start_date', toDate);
+
+  const { data, error } = await query;
+  if (error) {
+    if (isMissingRelationError(error, 'model_availability_blocks')) return [];
+    throw error;
+  }
+
+  return (data || []).map((block: any) => ({
+    id: block.id,
+    modelId: block.model_id,
+    startDate: block.start_date,
+    endDate: block.end_date,
+    reason: block.reason || undefined,
+    createdAt: block.created_at,
+  }));
+};
+
+export const saveModelAvailabilityBlock = async (
+  modelId: string,
+  block: { startDate: string; endDate: string; reason?: string }
+): Promise<void> => {
+  if (!(await hasOptionalRelation('model_availability_blocks'))) return;
+
+  const { error } = await supabase.from('model_availability_blocks').insert({
+    model_id: modelId,
+    start_date: block.startDate,
+    end_date: block.endDate,
+    reason: block.reason,
+  });
+
+  if (error) throw error;
+};
+
+export const deleteModelAvailabilityBlock = async (blockId: string): Promise<void> => {
+  if (!(await hasOptionalRelation('model_availability_blocks'))) return;
+
+  const { error } = await supabase.from('model_availability_blocks').delete().eq('id', blockId);
+  if (error) throw error;
+};
+
+export const getContractTemplates = async (documentType?: string): Promise<ContractTemplate[]> => {
+  if (!(await hasOptionalRelation('contract_templates'))) return [];
+
+  let query = supabase
+    .from('contract_templates')
+    .select('*')
+    .eq('is_active', true)
+    .order('document_type', { ascending: true })
+    .order('version', { ascending: false });
+
+  if (documentType) query = query.eq('document_type', documentType);
+
+  const { data, error } = await query;
+  if (error) {
+    if (isMissingRelationError(error, 'contract_templates')) return [];
+    throw error;
+  }
+
+  return (data || []).map((template: any) => ({
+    id: template.id,
+    name: template.name,
+    documentType: template.document_type,
+    body: template.body,
+    version: template.version,
+    isActive: template.is_active,
+    createdBy: template.created_by || undefined,
+    createdAt: template.created_at,
+    updatedAt: template.updated_at,
+  }));
+};
+
+export const createBookingAgreement = async (agreement: {
+  bookingId: string;
+  templateId?: string;
+  documentType: 'booking_agreement' | 'model_release';
+  documentSnapshot: string;
+}): Promise<string> => {
+  if (!(await hasOptionalRelation('booking_agreements'))) return '';
+
+  const { data, error } = await supabase
+    .from('booking_agreements')
+    .insert({
+      booking_id: agreement.bookingId,
+      template_id: agreement.templateId,
+      document_type: agreement.documentType,
+      document_snapshot: agreement.documentSnapshot,
+      status: 'draft',
+    })
+    .select('id')
+    .single();
+
+  if (error) throw error;
+  return data.id;
+};
+
+export const getBookingAgreements = async (bookingId: string): Promise<BookingAgreement[]> => {
+  if (!(await hasOptionalRelation('booking_agreements'))) return [];
+
+  const { data, error } = await supabase
+    .from('booking_agreements')
+    .select('*')
+    .eq('booking_id', bookingId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    if (isMissingRelationError(error, 'booking_agreements')) return [];
+    throw error;
+  }
+
+  return (data || []).map((agreement: any) => ({
+    id: agreement.id,
+    bookingId: agreement.booking_id,
+    templateId: agreement.template_id || undefined,
+    documentType: agreement.document_type,
+    status: agreement.status,
+    documentSnapshot: agreement.document_snapshot,
+    clientAcceptedAt: agreement.client_accepted_at || undefined,
+    modelAcceptedAt: agreement.model_accepted_at || undefined,
+    createdAt: agreement.created_at,
+    updatedAt: agreement.updated_at,
+  }));
+};
+
+export const createDispute = async (dispute: {
+  bookingId?: string;
+  openedBy: string;
+  againstUserId?: string;
+  reason: string;
+  details?: string;
+}): Promise<string> => {
+  if (!(await hasOptionalRelation('disputes'))) return '';
+
+  await enforceRateLimit('dispute_create', dispute.openedBy, 5, 3600);
+
+  const { data, error } = await supabase
+    .from('disputes')
+    .insert({
+      booking_id: dispute.bookingId,
+      opened_by: dispute.openedBy,
+      against_user_id: dispute.againstUserId,
+      reason: dispute.reason,
+      details: dispute.details,
+      status: 'open',
+    })
+    .select('id')
+    .single();
+
+  if (error) throw error;
+  return data.id;
+};
+
+export const getDisputesForBooking = async (bookingId: string): Promise<Dispute[]> => {
+  if (!(await hasOptionalRelation('disputes'))) return [];
+
+  const { data, error } = await supabase
+    .from('disputes')
+    .select('*')
+    .eq('booking_id', bookingId)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false })
+    .limit(20);
+
+  if (error) {
+    if (isMissingRelationError(error, 'disputes')) return [];
+    throw error;
+  }
+
+  return (data || []).map((dispute: any) => ({
+    id: dispute.id,
+    bookingId: dispute.booking_id || undefined,
+    openedBy: dispute.opened_by || undefined,
+    againstUserId: dispute.against_user_id || undefined,
+    status: dispute.status,
+    reason: dispute.reason,
+    details: dispute.details || undefined,
+    adminDecision: dispute.admin_decision || undefined,
+    resolvedBy: dispute.resolved_by || undefined,
+    resolvedAt: dispute.resolved_at || undefined,
+    deletedAt: dispute.deleted_at || undefined,
+    createdAt: dispute.created_at,
+    updatedAt: dispute.updated_at,
+  }));
+};
+
+export const addDisputeEvidence = async (evidence: {
+  disputeId: string;
+  uploadedBy: string;
+  cloudinaryUrl?: string;
+  cloudinaryPublicId?: string;
+  note?: string;
+}): Promise<void> => {
+  if (!(await hasOptionalRelation('dispute_evidence'))) return;
+
+  const { error } = await supabase.from('dispute_evidence').insert({
+    dispute_id: evidence.disputeId,
+    uploaded_by: evidence.uploadedBy,
+    cloudinary_url: evidence.cloudinaryUrl,
+    cloudinary_public_id: evidence.cloudinaryPublicId,
+    note: evidence.note,
+  });
+
+  if (error) throw error;
+};
+
+export const getDisputeEvidence = async (disputeId: string): Promise<DisputeEvidence[]> => {
+  if (!(await hasOptionalRelation('dispute_evidence'))) return [];
+
+  const { data, error } = await supabase
+    .from('dispute_evidence')
+    .select('*')
+    .eq('dispute_id', disputeId)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false })
+    .limit(50);
+
+  if (error) {
+    if (isMissingRelationError(error, 'dispute_evidence')) return [];
+    throw error;
+  }
+
+  return (data || []).map((item: any) => ({
+    id: item.id,
+    disputeId: item.dispute_id,
+    uploadedBy: item.uploaded_by || undefined,
+    cloudinaryUrl: item.cloudinary_url || undefined,
+    cloudinaryPublicId: item.cloudinary_public_id || undefined,
+    note: item.note || undefined,
+    createdAt: item.created_at,
+    deletedAt: item.deleted_at || undefined,
+  }));
 };
 
 // ... (continuing with agency applications, notifications, and utility functions)// services/supabase.service.part3.ts
@@ -2022,6 +2649,8 @@ export const inviteModelToAgency = async (
   agencyName: string,
   modelId: string
 ): Promise<void> => {
+  await enforceRateLimit('agency_invitation', agencyId, 50, 3600);
+
   const { error } = await supabase.from('agency_invitations').insert({
     agency_id: agencyId,
     agency_name: agencyName,
@@ -2305,6 +2934,9 @@ export const createNotification = async (notification: {
   message: string;
   link?: string;
 }): Promise<void> => {
+  const preferences = await getNotificationPreferences(notification.userId).catch(() => null);
+  if (preferences && !preferences.inAppEnabled) return;
+
   const { error } = await supabase.from('notifications').insert({
     user_id: notification.userId,
     type: notification.type,

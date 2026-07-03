@@ -5,7 +5,6 @@ import { useAuth } from '../auth/AuthContext';
 import { ShortlistContext } from '../App';
 import { UserRole } from '../types';
 import { Menu, X, User, LogOut, Sparkles, PlusCircle, Shield, Building } from 'lucide-react';
-import { isAdminEmail } from '../config/admin';
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { role, user, logout } = useAuth();
@@ -40,8 +39,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const isClient = role === UserRole.CLIENT;
   const isTalent = role === UserRole.MODEL || role === UserRole.AGENCY;
   
-  // Secure Admin Check: Email-based + Role-based
-  const isAdmin = (role === UserRole.ADMIN) || (user && isAdminEmail(user.email));
+  const isAdmin = role === UserRole.ADMIN;
 
   // Determine Logo Link destination based on role
   const logoLink = isTalent ? '/dashboard' : '/';

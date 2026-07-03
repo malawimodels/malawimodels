@@ -15,19 +15,23 @@ const AgencyRecruitTalent: React.FC = () => {
 
     useEffect(() => {
         if (!user) return;
+        let active = true;
+        let unsubRecruit: (() => void) | undefined;
 
         // Subscribe to real-time invites sent by this agency
         const unsubInvites = subscribeToAgencyOutgoingInvites(user.uid, (invites) => {
-            setSentInvites(invites);
+            if (active) setSentInvites(invites);
         });
 
         // Fetch list of users who are agencies (owners) to filter them out
         getAgencies().then((agencies) => {
+            if (!active) return;
             const agencyOwnerIds = agencies.map(a => a.uid);
 
-            const unsubRecruit = subscribeToSearchModels({
+            unsubRecruit = subscribeToSearchModels({
                 categories: [], locations: [], minHeight: 0, maxHeight: 300, gender: null, skinTones: [], onlyAvailable: false
             }, (models) => {
+                if (!active) return;
                 const availableForRecruitment = models.filter(m => 
                     m.uid !== user.uid && 
                     !m.agencyId && // Not signed
@@ -35,11 +39,13 @@ const AgencyRecruitTalent: React.FC = () => {
                 );
                 setAllModels(availableForRecruitment);
             });
-            
-            return unsubRecruit;
         });
 
-        return () => { unsubInvites(); };
+        return () => {
+            active = false;
+            unsubInvites();
+            unsubRecruit?.();
+        };
     }, [user]);
 
     const handleInvite = async (model: ModelProfile) => {
