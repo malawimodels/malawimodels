@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Malawi Models">
+  <rect width="64" height="64" rx="14" fill="#09090b"/>
+  <path d="M10 42h44v8H10z" fill="#15803d"/>
+  <path d="M10 32h44v8H10z" fill="#dc2626"/>
+  <path d="M10 14h44v16H10z" fill="#18181b"/>
+  <path d="M20 27c2.4-5.7 6.5-8.6 12-8.6S41.6 21.3 44 27" fill="none" stroke="#f59e0b" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="32" cy="30" r="5" fill="#f59e0b"/>
+  <path d="M22 52c1.6-7.3 5-11 10-11s8.4 3.7 10 11" fill="none" stroke="#fafafa" stroke-width="4" stroke-linecap="round"/>
+</svg>
