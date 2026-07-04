@@ -6,6 +6,7 @@ import { subscribeToAgencyModels, removeModelFromAgency, subscribeToAgencyLeaveR
 import { Users, Trash2, AlertTriangle, LogOut } from 'lucide-react';
 import ConfirmationModal from '../ConfirmationModal';
 import OptimizedImage from '../OptimizedImage';
+import { AVATAR_PLACEHOLDER_IMAGE } from '../../utils/placeholders';
 
 const AgencyModelManagement: React.FC = () => {
     const { user } = useAuth();
@@ -83,7 +84,7 @@ const AgencyModelManagement: React.FC = () => {
                         {models.map(model => (
                             <div key={model.uid} className="bg-black/20 p-4 rounded-xl border border-white/5 flex items-center justify-between">
                                 <div className="flex items-center gap-4">
-                                    <OptimizedImage src={model.media.images[0] || 'https://via.placeholder.com/150'} variant="avatar" className="w-12 h-12 rounded-lg object-cover" alt={model.displayName} />
+                                    <OptimizedImage src={model.media.images[0] || AVATAR_PLACEHOLDER_IMAGE} variant="avatar" className="w-12 h-12 rounded-lg object-cover" alt={model.displayName} />
                                     <div>
                                         <h4 className="text-white font-bold text-sm">{model.displayName}</h4>
                                         <p className="text-[10px] text-brand-muted">{model.categories[0]}</p>

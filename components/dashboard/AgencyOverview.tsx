@@ -5,6 +5,7 @@ import { ModelProfile } from '../../types';
 import { subscribeToAgencyModels } from '../../services/supabase.service';
 import { Users, TrendingUp, UserPlus, Info } from 'lucide-react';
 import OptimizedImage from '../OptimizedImage';
+import { AVATAR_PLACEHOLDER_IMAGE } from '../../utils/placeholders';
 
 const AgencyOverview: React.FC = () => {
     const { user, role } = useAuth();
@@ -63,7 +64,7 @@ const AgencyOverview: React.FC = () => {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             {agencyModels.slice(0, 4).map(model => (
                                 <div key={model.uid} className="bg-black/20 p-4 rounded-xl border border-white/5 flex items-center gap-4 hover:border-brand-primary/30 transition-colors">
-                                    <OptimizedImage src={model.media.images[0] || 'https://via.placeholder.com/150'} variant="avatar" className="w-12 h-12 rounded-lg object-cover" alt={model.displayName} />
+                                    <OptimizedImage src={model.media.images[0] || AVATAR_PLACEHOLDER_IMAGE} variant="avatar" className="w-12 h-12 rounded-lg object-cover" alt={model.displayName} />
                                     <div>
                                         <h4 className="text-white font-bold text-sm">{model.displayName}</h4>
                                         <p className="text-[10px] text-brand-muted">{model.views} Views</p>

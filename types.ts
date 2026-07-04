@@ -287,8 +287,74 @@ export interface Notification {
   data?: any;
   link?: string;
   read?: boolean;
+  dedupeKey?: string;
+  deliveredVia?: string[];
   createdAt: string;
   timestamp?: string;
+}
+
+export type AccountAppealStatus = 'pending' | 'under_review' | 'approved' | 'denied';
+
+export interface AccountAppeal {
+  id: string;
+  deletionRecordId?: string;
+  contactEmail: string;
+  message: string;
+  status: AccountAppealStatus;
+  warningMessage?: string;
+  adminNotes?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MessageUser {
+  id: string;
+  displayName: string;
+  role: UserRole;
+  photoUrl?: string;
+  email?: string;
+}
+
+export interface MessageThreadParticipant {
+  userId: string;
+  lastReadAt?: string;
+  pinnedAt?: string;
+  archivedAt?: string;
+  mutedUntil?: string;
+  user?: MessageUser;
+}
+
+export interface MessageThread {
+  id: string;
+  threadType: 'direct' | 'support' | 'group';
+  title?: string;
+  createdBy?: string;
+  participants: MessageThreadParticipant[];
+  lastMessageAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MessageItem {
+  id: string;
+  threadId: string;
+  senderId: string;
+  sender?: MessageUser;
+  body?: string;
+  voiceUrl?: string;
+  voicePublicId?: string;
+  voiceDurationSeconds?: number;
+  replyToMessageId?: string;
+  replyTo?: Pick<MessageItem, 'id' | 'body' | 'senderId'>;
+  tags: string[];
+  editedAt?: string;
+  editCount?: number;
+  deletedAt?: string;
+  deletedBy?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AgencyProfile {

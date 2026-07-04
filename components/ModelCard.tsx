@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { Heart, MapPin, CheckCircle, ArrowRight, Building, Star } from 'lucide-react';
 import { ShortlistContext } from '../App';
 import OptimizedImage from './OptimizedImage';
+import { MODEL_PLACEHOLDER_IMAGE } from '../utils/placeholders';
 
 interface ModelCardProps {
   model: ModelProfile;
@@ -14,7 +15,7 @@ const ModelCard: React.FC<ModelCardProps> = ({ model }) => {
   const { shortlist, toggleShortlist } = useContext(ShortlistContext);
   
   const isShortlisted = shortlist.includes(model.uid);
-  const imageSrc = model.media?.images?.[0] || 'https://via.placeholder.com/400x600?text=No+Image';
+  const imageSrc = model.media?.images?.[0] || MODEL_PLACEHOLDER_IMAGE;
 
   return (
     <div className="group relative w-full break-inside-avoid mb-6">

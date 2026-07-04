@@ -34,7 +34,7 @@ Commands:
 - `services/supabase.service.ts` is the central data/service/business layer.
 - `supabase.ts` creates the Supabase client from env vars.
 - `types.ts` is the central domain model.
-- `config/admin.ts` defines the single admin email, currently `mphepobenedict@gmail.com`.
+- Admin access should be derived from database role/RLS permissions, not a frontend email allowlist.
 - There is no `public.agencies` table. Agencies are users with `users.role = 'agency'`, plus user profile/gallery/custom-link data and model roster relationships.
 - Do not add policies/queries for `public.agencies` unless a real table is created.
 
@@ -184,7 +184,7 @@ Security layers:
 3. `ProtectedRoute` gates route access.
 4. Component-level conditional rendering hides unauthorized UI.
 5. Supabase RLS policies are the real backend enforcement.
-6. Admin email is checked by `isAdminEmail()` and SQL helper functions.
+6. Admin role is checked through Supabase role/RLS helpers.
 
 Important security caveats:
 
@@ -214,7 +214,7 @@ Important security caveats:
 
 Admin access:
 
-- Update admin email in `config/admin.ts`.
+- Update admin ownership in Supabase admin permission/role records.
 - Update and run `set-admin-role.sql`.
 - Update admin SQL helper/policies to match.
 - Rebuild app.

@@ -5,19 +5,19 @@
 -- =====================================================
 
 -- SECURITY: Update admin email to have admin role
--- Replace 'mphepobenedict@gmail.com' with your admin email if different
+-- Replace 'admin@example.com' with your admin email before running.
 UPDATE auth.users
 SET raw_user_meta_data = jsonb_set(
     COALESCE(raw_user_meta_data, '{}'::jsonb),
     '{role}',
     '"admin"'
 )
-WHERE email = 'mphepobenedict@gmail.com';
+WHERE email = 'admin@example.com';
 
 -- Update the users table as well
 UPDATE public.users
 SET role = 'admin'
-WHERE email = 'mphepobenedict@gmail.com';
+WHERE email = 'admin@example.com';
 
 -- Verify the update
 SELECT 
@@ -28,7 +28,7 @@ SELECT
     is_active,
     verified
 FROM public.users
-WHERE email = 'mphepobenedict@gmail.com';
+WHERE email = 'admin@example.com';
 
 -- =====================================================
 -- SUCCESS MESSAGE

@@ -11,10 +11,12 @@ import {
   ReportReason, NotificationType, ReportStatus,
   AgencyApplication, LeaveRequest, AdminPermission, AvailabilityBlock,
   NotificationPreferences, ContractTemplate, BookingAgreement, Dispute,
-  DisputeEvidence, Review, ModelRankingSignal
+  DisputeEvidence, Review, ModelRankingSignal, AccountAppeal,
+  AccountAppealStatus, MessageUser, MessageThread, MessageItem
 } from '../types';
 import { getPublicIdFromUrl } from './cloudinary';
 import { getCachedJson, setCachedJson, stableCacheKey } from '../utils/indexedDbCache';
+import { publishAblyEvent, subscribeToAblyEvent } from './ably.service';
 
 const isMissingColumnError = (error: any, columnName: string): boolean => {
   const message = `${error?.message || ''} ${error?.details || ''}`.toLowerCase();
@@ -75,6 +77,12 @@ export const isBookingReviewable = (booking: Pick<Booking, 'status' | 'eventDate
 const getCurrentAuthUserId = async (): Promise<string | null> => {
   const { data: { user } } = await supabase.auth.getUser();
   return user?.id || null;
+};
+
+const sha256Hex = async (value: string): Promise<string> => {
+  const bytes = new TextEncoder().encode(value.toLowerCase().trim());
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
 const ensureModelProfileRow = async (uid: string): Promise<void> => {
@@ -467,17 +475,69 @@ export const toggleUserStatus = async (
   });
 };
 
-export const deleteUserPermanently = async (uid: string, _role?: UserRole): Promise<void> => {
+export const deleteUserPermanently = async (uid: string, _role?: UserRole, reason = 'Deleted by admin'): Promise<void> => {
   const { data: user } = await supabase
     .from('users')
-    .select('deletion_count')
+    .select('email, display_name, deletion_count')
     .eq('id', uid)
     .maybeSingle();
+
+  const { data: sessionData } = await supabase.auth.getSession();
+  const accessToken = sessionData.session?.access_token;
+
+  const canUseAdminDeleteFunction = !import.meta.env.DEV || import.meta.env.VITE_ENABLE_ADMIN_DELETE_DEV === 'true';
+
+  if (accessToken && canUseAdminDeleteFunction) {
+    try {
+      const response = await fetch('/api/admin-delete-user', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ uid, role: _role, reason }),
+      });
+
+      if (response.ok) return;
+      if (![404, 405, 503].includes(response.status)) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error || 'Failed to delete user account.');
+      }
+    } catch (error) {
+      if (error instanceof Error && !error.message.includes('Failed to fetch')) throw error;
+    }
+  }
+
+  const currentAdminId = await getCurrentAuthUserId();
+  const emailHash = user?.email ? await sha256Hex(user.email) : undefined;
+
+  const deletionRecord = await supabase.from('account_deletion_records').insert({
+    former_user_id: uid,
+    email_hash: emailHash,
+    role_snapshot: _role,
+    display_name_snapshot: user?.display_name,
+    deletion_count: (user?.deletion_count || 0) + 1,
+    reason,
+    deleted_by: currentAdminId,
+  });
+
+  if (deletionRecord.error && !isMissingRelationError(deletionRecord.error, 'account_deletion_records')) {
+    throw deletionRecord.error;
+  }
 
   const { error } = await supabase
     .from('users')
     .update({
       is_active: false,
+      email: `deleted-${uid}@deleted.invalid`,
+      display_name: 'Deleted User',
+      photo_url: null,
+      public_email: null,
+      whatsapp: null,
+      instagram: null,
+      facebook: null,
+      website: null,
+      bio: null,
       deletion_count: (user?.deletion_count || 0) + 1,
     })
     .eq('id', uid);
@@ -488,8 +548,384 @@ export const deleteUserPermanently = async (uid: string, _role?: UserRole): Prom
     targetUserId: uid,
     targetTable: 'users',
     targetId: uid,
-    details: { previousRole: _role },
+    details: { previousRole: _role, reason, serverHardDeleteConfigured: false },
   });
+};
+
+export const submitAccountAppeal = async (contactEmail: string, message: string): Promise<void> => {
+  const normalizedEmail = contactEmail.toLowerCase().trim();
+  if (!normalizedEmail || !message.trim()) throw new Error('Email and appeal message are required.');
+
+  const emailHash = await sha256Hex(normalizedEmail);
+  const { error } = await supabase.from('account_appeals').insert({
+    contact_email: normalizedEmail,
+    email_hash: emailHash,
+    message: message.trim(),
+    status: 'pending',
+  });
+
+  if (error) throw error;
+};
+
+export const subscribeToAccountAppeals = (callback: (appeals: AccountAppeal[]) => void): (() => void) => {
+  let active = true;
+
+  const fetchAppeals = async () => {
+    const { data, error } = await supabase
+      .from('account_appeals')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (error) {
+      if (isMissingRelationError(error, 'account_appeals')) {
+        if (active) callback([]);
+        return;
+      }
+      console.error('Error fetching account appeals:', error);
+      if (active) callback([]);
+      return;
+    }
+
+    if (active) callback((data || []).map(transformAccountAppeal));
+  };
+
+  fetchAppeals();
+
+  const subscription = supabase
+    .channel('account_appeals')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'account_appeals' }, fetchAppeals)
+    .subscribe();
+
+  return () => {
+    active = false;
+    subscription.unsubscribe();
+  };
+};
+
+export const processAccountAppeal = async (
+  appealId: string,
+  status: AccountAppealStatus,
+  adminNotes?: string,
+  warningMessage?: string
+): Promise<void> => {
+  const reviewedBy = await getCurrentAuthUserId();
+  const { error } = await supabase
+    .from('account_appeals')
+    .update({
+      status,
+      admin_notes: adminNotes || null,
+      warning_message: warningMessage || null,
+      reviewed_by: reviewedBy,
+      reviewed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', appealId);
+
+  if (error) throw error;
+};
+
+const transformMessageUser = (data: any): MessageUser => ({
+  id: data.id,
+  displayName: data.display_name || data.email?.split('@')[0] || 'User',
+  role: data.role,
+  photoUrl: data.photo_url || undefined,
+  email: data.email || undefined,
+});
+
+export const getMessagingRecipients = async (query = ''): Promise<MessageUser[]> => {
+  const { data, error } = await supabase.rpc('get_message_recipients', {
+    p_query: query.trim(),
+  });
+
+  if (error) throw error;
+  return (data || []).map(transformMessageUser);
+};
+
+export const startDirectMessageThread = async (otherUserId: string): Promise<string> => {
+  const { data, error } = await supabase.rpc('get_or_create_direct_message_thread', {
+    p_other_user_id: otherUserId,
+  });
+
+  if (error) throw error;
+  return data;
+};
+
+const fetchThreadParticipants = async (threadIds: string[]): Promise<Map<string, any[]>> => {
+  if (threadIds.length === 0) return new Map();
+
+  const { data, error } = await supabase
+    .from('message_thread_participants')
+    .select('thread_id, user_id, last_read_at, pinned_at, archived_at, muted_until, users!message_thread_participants_user_id_fkey(id, display_name, email, role, photo_url)')
+    .in('thread_id', threadIds);
+
+  if (error) throw error;
+
+  const byThread = new Map<string, any[]>();
+  (data || []).forEach((participant: any) => {
+    const existing = byThread.get(participant.thread_id) || [];
+    existing.push(participant);
+    byThread.set(participant.thread_id, existing);
+  });
+
+  return byThread;
+};
+
+const transformMessageThread = (thread: any, participants: any[]): MessageThread => ({
+  id: thread.id,
+  threadType: thread.thread_type,
+  title: thread.title || undefined,
+  createdBy: thread.created_by || undefined,
+  participants: participants.map((participant) => ({
+    userId: participant.user_id,
+    lastReadAt: participant.last_read_at || undefined,
+    pinnedAt: participant.pinned_at || undefined,
+    archivedAt: participant.archived_at || undefined,
+    mutedUntil: participant.muted_until || undefined,
+    user: participant.users ? transformMessageUser(participant.users) : undefined,
+  })),
+  lastMessageAt: thread.last_message_at,
+  createdAt: thread.created_at,
+  updatedAt: thread.updated_at,
+});
+
+export const getMessageThreads = async (): Promise<MessageThread[]> => {
+  const currentUserId = await getCurrentAuthUserId();
+  if (!currentUserId) return [];
+
+  const { data: participantRows, error: participantError } = await supabase
+    .from('message_thread_participants')
+    .select('thread_id')
+    .eq('user_id', currentUserId)
+    .is('archived_at', null)
+    .limit(50);
+
+  if (participantError) {
+    if (isMissingRelationError(participantError, 'message_thread_participants')) return [];
+    throw participantError;
+  }
+
+  const threadIds = (participantRows || []).map((row: any) => row.thread_id);
+  if (threadIds.length === 0) return [];
+
+  const [{ data: threads, error }, participantsByThread] = await Promise.all([
+    supabase
+      .from('message_threads')
+      .select('*')
+      .in('id', threadIds)
+      .order('last_message_at', { ascending: false })
+      .limit(50),
+    fetchThreadParticipants(threadIds),
+  ]);
+
+  if (error) throw error;
+  return (threads || [])
+    .map((thread: any) => transformMessageThread(thread, participantsByThread.get(thread.id) || []))
+    .sort((a, b) => {
+      const aPinned = a.participants.find((participant) => participant.userId === currentUserId)?.pinnedAt || '';
+      const bPinned = b.participants.find((participant) => participant.userId === currentUserId)?.pinnedAt || '';
+      if (aPinned || bPinned) return bPinned.localeCompare(aPinned);
+      return b.lastMessageAt.localeCompare(a.lastMessageAt);
+    });
+};
+
+export const toggleMessageThreadPinned = async (threadId: string, pinned: boolean): Promise<void> => {
+  const userId = await getCurrentAuthUserId();
+  if (!userId) throw new Error('You must be signed in.');
+
+  const { error } = await supabase
+    .from('message_thread_participants')
+    .update({ pinned_at: pinned ? new Date().toISOString() : null })
+    .eq('thread_id', threadId)
+    .eq('user_id', userId);
+
+  if (error) throw error;
+  await publishAblyEvent(`user:${userId}:messages`, 'message.changed', { threadId });
+};
+
+export const subscribeToMessageThreads = (
+  userId: string,
+  callback: (threads: MessageThread[]) => void
+): (() => void) => {
+  let active = true;
+
+  const fetchThreads = () => {
+    getMessageThreads()
+      .then((threads) => { if (active) callback(threads); })
+      .catch((error) => {
+        console.error('Error fetching message threads:', error);
+        if (active) callback([]);
+      });
+  };
+
+  fetchThreads();
+  const cleanupAbly = subscribeToAblyEvent(`user:${userId}:messages`, 'message.changed', fetchThreads);
+
+  const fallback = supabase
+    .channel(`message_threads:${userId}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'message_thread_participants', filter: `user_id=eq.${userId}` }, fetchThreads)
+    .subscribe();
+
+  return () => {
+    active = false;
+    cleanupAbly();
+    fallback.unsubscribe();
+  };
+};
+
+const transformMessageItem = (message: any): MessageItem => ({
+  id: message.id,
+  threadId: message.thread_id,
+  senderId: message.sender_id,
+  sender: message.sender ? transformMessageUser(message.sender) : undefined,
+  body: message.body || undefined,
+  voiceUrl: message.voice_url || undefined,
+  voicePublicId: message.voice_public_id || undefined,
+  voiceDurationSeconds: message.voice_duration_seconds || undefined,
+  replyToMessageId: message.reply_to_message_id || undefined,
+  tags: message.tags || [],
+  editedAt: message.edited_at || undefined,
+  editCount: Number(message.edit_count || 0),
+  deletedAt: message.deleted_at || undefined,
+  deletedBy: message.deleted_by || undefined,
+  createdAt: message.created_at,
+  updatedAt: message.updated_at,
+});
+
+export const getMessages = async (threadId: string): Promise<MessageItem[]> => {
+  const currentUserId = await getCurrentAuthUserId();
+  if (!currentUserId) return [];
+
+  const [{ data: messages, error }, { data: deletedForMe }] = await Promise.all([
+    supabase
+      .from('messages')
+      .select('*, sender:users!messages_sender_id_fkey(id, display_name, email, role, photo_url)')
+      .eq('thread_id', threadId)
+      .order('created_at', { ascending: false })
+      .limit(80),
+    supabase
+      .from('message_deletions')
+      .select('message_id')
+      .eq('user_id', currentUserId),
+  ]);
+
+  if (error) {
+    if (isMissingRelationError(error, 'messages')) return [];
+    throw error;
+  }
+
+  const deletedIds = new Set((deletedForMe || []).map((row: any) => row.message_id));
+  const visibleMessages = (messages || [])
+    .filter((message: any) => !deletedIds.has(message.id))
+    .reverse()
+    .map(transformMessageItem);
+
+  supabase.rpc('mark_message_thread_read', { p_thread_id: threadId }).catch(() => {});
+  return visibleMessages;
+};
+
+export const subscribeToMessages = (
+  threadId: string,
+  callback: (messages: MessageItem[]) => void
+): (() => void) => {
+  let active = true;
+
+  const fetchMessages = () => {
+    getMessages(threadId)
+      .then((messages) => { if (active) callback(messages); })
+      .catch((error) => {
+        console.error('Error fetching messages:', error);
+        if (active) callback([]);
+      });
+  };
+
+  fetchMessages();
+  const cleanupAbly = subscribeToAblyEvent(`message:${threadId}`, 'message.changed', fetchMessages);
+  const fallback = supabase
+    .channel(`messages:${threadId}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `thread_id=eq.${threadId}` }, fetchMessages)
+    .subscribe();
+
+  return () => {
+    active = false;
+    cleanupAbly();
+    fallback.unsubscribe();
+  };
+};
+
+export const sendMessage = async (payload: {
+  threadId: string;
+  body?: string;
+  voiceUrl?: string;
+  voicePublicId?: string;
+  voiceDurationSeconds?: number;
+  replyToMessageId?: string;
+  tags?: string[];
+}): Promise<void> => {
+  const senderId = await getCurrentAuthUserId();
+  if (!senderId) throw new Error('You must be signed in to send messages.');
+
+  const { error } = await supabase.from('messages').insert({
+    thread_id: payload.threadId,
+    sender_id: senderId,
+    body: payload.body?.trim() || null,
+    voice_url: payload.voiceUrl || null,
+    voice_public_id: payload.voicePublicId || null,
+    voice_duration_seconds: payload.voiceDurationSeconds || null,
+    reply_to_message_id: payload.replyToMessageId || null,
+    tags: payload.tags || [],
+  });
+
+  if (error) throw error;
+
+  const participants = await fetchThreadParticipants([payload.threadId]);
+  const participantIds = (participants.get(payload.threadId) || []).map((participant) => participant.user_id);
+
+  await Promise.all([
+    publishAblyEvent(`message:${payload.threadId}`, 'message.changed', { threadId: payload.threadId }),
+    ...participantIds.map((participantId) => publishAblyEvent(`user:${participantId}:messages`, 'message.changed', { threadId: payload.threadId })),
+  ]);
+};
+
+export const deleteMessageForMe = async (messageId: string): Promise<void> => {
+  const userId = await getCurrentAuthUserId();
+  if (!userId) throw new Error('You must be signed in.');
+
+  const { error } = await supabase.from('message_deletions').upsert({
+    message_id: messageId,
+    user_id: userId,
+  });
+  if (error) throw error;
+};
+
+export const editMessageOnce = async (messageId: string, body: string): Promise<void> => {
+  const { error } = await supabase.rpc('edit_message_once', {
+    p_message_id: messageId,
+    p_body: body,
+  });
+
+  if (error) throw error;
+
+  const { data: message } = await supabase
+    .from('messages')
+    .select('thread_id')
+    .eq('id', messageId)
+    .maybeSingle();
+
+  if (message?.thread_id) {
+    await publishAblyEvent(`message:${message.thread_id}`, 'message.changed', { threadId: message.thread_id });
+  }
+};
+
+export const deleteMessageForEveryone = async (messageId: string): Promise<void> => {
+  const { data: threadId, error } = await supabase.rpc('delete_message_for_everyone', {
+    p_message_id: messageId,
+  });
+
+  if (error) throw error;
+  if (threadId) {
+    await publishAblyEvent(`message:${threadId}`, 'message.changed', { threadId });
+  }
 };
 
 export const sendAdminWarning = async (
@@ -3649,9 +4085,18 @@ export const createNotification = async (notification: {
   title: string;
   message: string;
   link?: string;
+  dedupeKey?: string;
 }): Promise<void> => {
   const preferences = await getNotificationPreferences(notification.userId).catch(() => null);
   if (preferences && !preferences.inAppEnabled) return;
+
+  const dedupeKey = notification.dedupeKey || stableCacheKey('notification', {
+    userId: notification.userId,
+    type: notification.type,
+    title: notification.title,
+    message: notification.message,
+    link: notification.link || '',
+  });
 
   const { error } = await supabase.from('notifications').insert({
     user_id: notification.userId,
@@ -3660,11 +4105,21 @@ export const createNotification = async (notification: {
     message: notification.message,
     link: notification.link,
     read: false,
+    dedupe_key: dedupeKey,
   });
 
   if (error) {
+    if (error.code === '23505') return;
     console.error('Error creating notification:', error);
+    return;
   }
+
+  await publishAblyEvent(`user:${notification.userId}:notifications`, 'notification.created', {
+    title: notification.title,
+    message: notification.message,
+    link: notification.link,
+    type: notification.type,
+  });
 };
 
 export const subscribeToNotifications = (
@@ -3962,8 +4417,26 @@ function transformNotification(data: any): Notification {
     message: data.message,
     link: data.link,
     read: data.read,
+    dedupeKey: data.dedupe_key || undefined,
+    deliveredVia: data.delivered_via || undefined,
     createdAt: data.created_at,
     timestamp: data.created_at,
+  };
+}
+
+function transformAccountAppeal(data: any): AccountAppeal {
+  return {
+    id: data.id,
+    deletionRecordId: data.deletion_record_id || undefined,
+    contactEmail: data.contact_email,
+    message: data.message,
+    status: data.status,
+    warningMessage: data.warning_message || undefined,
+    adminNotes: data.admin_notes || undefined,
+    reviewedBy: data.reviewed_by || undefined,
+    reviewedAt: data.reviewed_at || undefined,
+    createdAt: data.created_at,
+    updatedAt: data.updated_at,
   };
 }
 
@@ -4084,13 +4557,15 @@ export const getClientPublicStats = async (clientId: string) => {
 export const getModelRankingSignals = async (limit = 10): Promise<ModelRankingSignal[]> => {
   const { data: models, error } = await supabase
     .from('models')
-    .select('id, ranking_score, profile_completeness, users (display_name, average_rating, reviews_count)')
+    .select('id, ranking_score, profile_completeness')
     .order('ranking_score', { ascending: false })
     .limit(limit);
 
   if (error) throw error;
   const modelIds = (models || []).map((model: any) => model.id).filter(Boolean);
   if (modelIds.length === 0) return [];
+
+  const modelsWithUsers = await attachUsersToModels(models || []);
 
   const [{ data: bookings }, { data: applications }] = await Promise.all([
     supabase
@@ -4120,7 +4595,7 @@ export const getModelRankingSignals = async (limit = 10): Promise<ModelRankingSi
     applicationStats.set(application.model_id, stats);
   });
 
-  return (models || []).map((model: any) => {
+  return modelsWithUsers.map((model: any) => {
     const user = Array.isArray(model.users) ? model.users[0] : model.users;
     const bookingsForModel = bookingStats.get(model.id) || { completed: 0, cancelled: 0 };
     const applicationsForModel = applicationStats.get(model.id) || { total: 0, approved: 0 };

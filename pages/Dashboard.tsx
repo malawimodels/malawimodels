@@ -18,8 +18,9 @@ import ModelOverview from '../components/dashboard/ModelOverview';
 import ModelProfileSettings from '../components/dashboard/ModelProfileSettings';
 import ReviewHistoryView from '../components/dashboard/ReviewHistoryView';
 import OptimizedImage from '../components/OptimizedImage';
+import MessagingCenter from '../components/dashboard/MessagingCenter';
 
-type Tab = 'overview' | 'profile' | 'opportunities' | 'bookings' | 'reviews';
+type Tab = 'overview' | 'profile' | 'opportunities' | 'bookings' | 'reviews' | 'messages';
 
 const Dashboard: React.FC = () => {
   const { user, role } = useAuth();
@@ -280,13 +281,13 @@ const Dashboard: React.FC = () => {
                     )}
                 </div>
 
-                <div className="flex flex-wrap justify-center bg-white/5 p-1 rounded-xl w-full sm:w-auto gap-1">
-                    <button onClick={() => setActiveTab('overview')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow sm:flex-grow-0 transition-all ${activeTab === 'overview' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Overview</button>
-                    <button onClick={() => setActiveTab('bookings')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow sm:flex-grow-0 transition-all ${activeTab === 'bookings' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Bookings</button>
-                    <button onClick={() => setActiveTab('opportunities')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow sm:flex-grow-0 transition-all ${activeTab === 'opportunities' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Opportunities</button>
-                    <button onClick={() => setActiveTab('reviews')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow sm:flex-grow-0 transition-all ${activeTab === 'reviews' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Reviews</button>
-                    <button onClick={() => navigate('/')} className="px-4 py-2 rounded-lg text-sm font-bold flex-grow sm:flex-grow-0 transition-all text-brand-muted hover:text-white">Talent Search</button>
-                    <button onClick={() => setActiveTab('profile')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow sm:flex-grow-0 transition-all ${activeTab === 'profile' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}>Profile</button>
+                <div className="dashboard-tab-list">
+                    <button onClick={() => setActiveTab('overview')} className={`dashboard-tab ${activeTab === 'overview' ? 'dashboard-tab--active' : 'dashboard-tab--idle'}`}>Overview</button>
+                    <button onClick={() => setActiveTab('bookings')} className={`dashboard-tab ${activeTab === 'bookings' ? 'dashboard-tab--active' : 'dashboard-tab--idle'}`}>Bookings</button>
+                    <button onClick={() => setActiveTab('messages')} className={`dashboard-tab ${activeTab === 'messages' ? 'dashboard-tab--active' : 'dashboard-tab--idle'}`}>Messages</button>
+                    <button onClick={() => setActiveTab('opportunities')} className={`dashboard-tab ${activeTab === 'opportunities' ? 'dashboard-tab--active' : 'dashboard-tab--idle'}`}>Opportunities</button>
+                    <button onClick={() => setActiveTab('reviews')} className={`dashboard-tab ${activeTab === 'reviews' ? 'dashboard-tab--active' : 'dashboard-tab--idle'}`}>Reviews</button>
+                    <button onClick={() => setActiveTab('profile')} className={`dashboard-tab ${activeTab === 'profile' ? 'dashboard-tab--active dashboard-tab--active-neutral' : 'dashboard-tab--idle'}`}>Profile</button>
                 </div>
             </div>
         </div>
@@ -322,6 +323,10 @@ const Dashboard: React.FC = () => {
              <div className="animate-slide-up">
                  <ModelBookingsView />
              </div>
+        )}
+
+        {activeTab === 'messages' && user && (
+            <MessagingCenter currentUserId={user.uid} currentRole={role} />
         )}
 
         {activeTab === 'reviews' && user && (

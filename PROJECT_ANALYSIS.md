@@ -30,7 +30,7 @@ A full-stack web application connecting models, agencies, and clients (brands/co
 | File | Purpose | Key Details |
 |------|---------|-------------|
 | [package.json](package.json) | Dependencies & scripts | React 19, Firebase 12, Router 7, dev script: `vite` |
-| [vite.config.ts](vite.config.ts) | Build & dev server config | Defines `process.env.GEMINI_API_KEY` via `loadEnv`, port 3000 |
+| [vite.config.ts](vite.config.ts) | Build & dev server config | Vite React setup, port 3000, vendor chunking |
 | [tsconfig.json](tsconfig.json) | TypeScript compiler | Target ES2022, JSX react-jsx, bundler resolution |
 | [.gitignore](.gitignore) | Version control | node_modules, dist, .local files ignored |
 | [.firebaserc](.firebaserc) | Firebase project ID | `default: malawimodels` |
@@ -403,18 +403,12 @@ Path C: Model leaves Agency
 - `/client-dashboard` → role === 'client'
 - `/casting` → role === 'client'
 - `/agency-registration` → role === 'model' (to become agency owner)
-- `/admin` → role === 'admin' (checked via ADMIN_EMAILS array in [components/Layout.tsx](components/Layout.tsx))
+- `/admin` → role === 'admin' from Supabase user role/RLS-backed permissions
 
 ### Authorization Checks
 
-**Layout.tsx Admin Check:**
-```typescript
-const ADMIN_EMAILS = [
-  'drblessed05@gmail.com',
-  'blesse3344@gmai.com' // ❌ TYPO HERE
-];
-const isAdmin = user && ADMIN_EMAILS.includes(user.email || '');
-```
+**Admin Check:**
+Admin access should resolve from Supabase role/admin permission records, not a frontend email array.
 
 **Firestore Rules Admin Check:**
 ```javascript
@@ -758,10 +752,17 @@ npm audit
 ### Required Environment Variables
 **Missing `.env.local` file!**
 
-Expected variables (based on README & vite.config):
+Expected variables:
 ```
-GEMINI_API_KEY=<your_key>  # Referenced in vite.config.ts
+VITE_SUPABASE_URL=<your Supabase project URL>
+VITE_SUPABASE_ANON_KEY=<your Supabase anon public key>
+VITE_CLOUDINARY_CLOUD_NAME=<your Cloudinary cloud name>
+VITE_CLOUDINARY_UPLOAD_PRESET_PROFILE=<unsigned profile preset>
+VITE_CLOUDINARY_UPLOAD_PRESET_GALLERY=<unsigned gallery preset>
+VITE_CLOUDINARY_UPLOAD_PRESET_PAYMENT=<unsigned payment preset>
 ```
+
+Do not add Cloudinary API secrets, Supabase service-role keys, or other private keys to Vite environment variables.
 
 **Note:** Firebase config should also be moved to env vars:
 ```
@@ -830,9 +831,9 @@ match /projects/{projectId} {
    - Update [firebase.ts](firebase.ts) to use `import.meta.env.VITE_FIREBASE_*`
    - Add `.env.local` to `.gitignore` (already there ✅)
 
-2. **Fix Admin Email Typo**
-   - [firestore.rules](firestore.rules): Line containing `blesse3344@gmai.com` → `@gmail.com`
-   - [components/Layout.tsx](components/Layout.tsx): ADMIN_EMAILS array
+2. **Verify Admin Role Security**
+   - Ensure admin access is assigned through Supabase role/admin permission records.
+   - Ensure RLS blocks non-admin users from admin tables and actions.
 
 3. **Resolve Missing CSS File**
    - Either create `/index.css` or remove `<link>` from [index.html](index.html)
@@ -992,12 +993,7 @@ Path B: Agency invites Model
    - Basic event tracking (initialized but minimal usage)
 
 ### External APIs Referenced
-1. **Google AI (Gemini)**
-   - GEMINI_API_KEY in vite.config
-   - ❌ No actual implementation found in codebase
-   - **Likely:** Planned feature for AI-powered features (model recommendations, content moderation)
-
-2. **YouTube**
+1. **YouTube**
    - Model video reels stored as YouTube URLs
    - No API calls, just embedded links
 
@@ -1079,7 +1075,7 @@ Path B: Agency invites Model
 
 ### Safe Refactoring Targets
 1. Split firestore.ts → Start with user-related functions
-2. Extract Layout.tsx ADMIN_EMAILS to constants file
+2. Keep admin ownership out of frontend constants
 3. Convert CSS class strings to const objects
 4. Add PropTypes or zod validation to components
 

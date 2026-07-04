@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { UserData } from '../types';
+import { UserData, UserRole } from '../types';
 import { subscribeToUser, updateUserData } from '../services/supabase.service';
 import { Briefcase } from 'lucide-react';
 import { useNotification } from '../components/NotificationSystem';
@@ -13,13 +13,14 @@ import ClientOverview from '../components/dashboard/ClientOverview';
 import ClientProfileSettings from '../components/dashboard/ClientProfileSettings';
 import ReviewHistoryView from '../components/dashboard/ReviewHistoryView';
 import OptimizedImage from '../components/OptimizedImage';
+import MessagingCenter from '../components/dashboard/MessagingCenter';
 
 const ClientDashboard: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const { addNotification } = useNotification();
   const [userData, setUserData] = useState<UserData | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'projects' | 'profile' | 'bookings' | 'reviews'>('projects');
+    const [activeTab, setActiveTab] = useState<'overview' | 'projects' | 'profile' | 'bookings' | 'reviews' | 'messages'>('projects');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -93,12 +94,13 @@ const ClientDashboard: React.FC = () => {
              </div>
           </div>
           
-          <div className="flex flex-wrap justify-center items-center bg-white/5 p-1 rounded-xl w-full md:w-auto gap-1">
-             <button onClick={() => setActiveTab('overview')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow md:flex-grow-0 transition-all ${activeTab === 'overview' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Overview</button>
-             <button onClick={() => setActiveTab('projects')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow md:flex-grow-0 transition-all ${activeTab === 'projects' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Projects</button>
-             <button onClick={() => setActiveTab('bookings')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow md:flex-grow-0 transition-all ${activeTab === 'bookings' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Bookings</button>
-             <button onClick={() => setActiveTab('reviews')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow md:flex-grow-0 transition-all ${activeTab === 'reviews' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Reviews</button>
-             <button onClick={() => setActiveTab('profile')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow md:flex-grow-0 transition-all ${activeTab === 'profile' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}>Settings</button>
+             <div className="dashboard-tab-list">
+                 <button onClick={() => setActiveTab('overview')} className={`dashboard-tab ${activeTab === 'overview' ? 'dashboard-tab--active' : 'dashboard-tab--idle'}`}>Overview</button>
+                 <button onClick={() => setActiveTab('projects')} className={`dashboard-tab ${activeTab === 'projects' ? 'dashboard-tab--active' : 'dashboard-tab--idle'}`}>Projects</button>
+                 <button onClick={() => setActiveTab('bookings')} className={`dashboard-tab ${activeTab === 'bookings' ? 'dashboard-tab--active' : 'dashboard-tab--idle'}`}>Bookings</button>
+                 <button onClick={() => setActiveTab('messages')} className={`dashboard-tab ${activeTab === 'messages' ? 'dashboard-tab--active' : 'dashboard-tab--idle'}`}>Messages</button>
+                 <button onClick={() => setActiveTab('reviews')} className={`dashboard-tab ${activeTab === 'reviews' ? 'dashboard-tab--active' : 'dashboard-tab--idle'}`}>Reviews</button>
+                 <button onClick={() => setActiveTab('profile')} className={`dashboard-tab ${activeTab === 'profile' ? 'dashboard-tab--active dashboard-tab--active-neutral' : 'dashboard-tab--idle'}`}>Settings</button>
           </div>
        </div>
 
@@ -121,6 +123,10 @@ const ClientDashboard: React.FC = () => {
                title="Reviews You Left"
                emptyText="You have not reviewed any completed bookings yet."
            />
+       )}
+
+       {activeTab === 'messages' && user && (
+           <MessagingCenter currentUserId={user.uid} currentRole={UserRole.CLIENT} />
        )}
 
        {activeTab === 'profile' && userData && (

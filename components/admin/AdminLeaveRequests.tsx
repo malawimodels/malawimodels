@@ -3,10 +3,12 @@ import React, { useState, useEffect } from 'react';
 import { LeaveRequest } from '../../types';
 import { subscribeToAdminLeaveRequests, processLeaveRequest } from '../../services/supabase.service';
 import { LogOut, CheckCircle, XCircle } from 'lucide-react';
+import { useNotification } from '../NotificationSystem';
 
 const AdminLeaveRequests: React.FC = () => {
     const [requests, setRequests] = useState<LeaveRequest[]>([]);
     const [loading, setLoading] = useState(true);
+    const { addNotification, confirmAction } = useNotification();
 
     useEffect(() => {
         const unsub = subscribeToAdminLeaveRequests((data) => {
@@ -17,11 +19,18 @@ const AdminLeaveRequests: React.FC = () => {
     }, []);
 
     const handleProcess = async (req: LeaveRequest, approved: boolean) => {
-        if(!confirm(`Are you sure you want to ${approved ? 'APPROVE' : 'REJECT'} this request?`)) return;
+        const confirmed = await confirmAction({
+            title: approved ? 'Approve Leave Request' : 'Reject Leave Request',
+            message: `Are you sure you want to ${approved ? 'approve' : 'reject'} this request?`,
+            confirmLabel: approved ? 'Approve' : 'Reject',
+            isDestructive: !approved,
+        });
+        if (!confirmed) return;
         try {
             await processLeaveRequest(req.id, approved, req.modelUid);
+            addNotification('success', approved ? 'Leave request approved.' : 'Leave request rejected.');
         } catch (e) {
-            alert("Failed to process request.");
+            addNotification('error', 'Failed to process request.');
         }
     };
 

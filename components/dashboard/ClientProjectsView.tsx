@@ -8,6 +8,7 @@ import { Plus, Search, Filter, Briefcase, Calendar, MapPin, Edit2, Trash2, X, Ch
 import ConfirmationModal from '../ConfirmationModal';
 import { useNotification } from '../NotificationSystem';
 import OptimizedImage from '../OptimizedImage';
+import { AVATAR_PLACEHOLDER_IMAGE } from '../../utils/placeholders';
 
 // Robust Applicant Row Component
 const ApplicantRow: React.FC<{ 
@@ -48,7 +49,7 @@ const ApplicantRow: React.FC<{
         <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-black/20 p-4 rounded-xl border border-white/5 hover:border-white/10 transition-colors gap-4">
             <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-full overflow-hidden bg-brand-surface border border-white/10 flex-shrink-0">
-                    <OptimizedImage src={model.media?.images?.[0] || 'https://via.placeholder.com/150'} variant="avatar" className="w-full h-full object-cover" alt={model.displayName} />
+                    <OptimizedImage src={model.media?.images?.[0] || AVATAR_PLACEHOLDER_IMAGE} variant="avatar" className="w-full h-full object-cover" alt={model.displayName} />
                 </div>
                 <div>
                     <div 

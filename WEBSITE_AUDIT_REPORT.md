@@ -207,7 +207,7 @@ Overall risk posture: medium-high until database RLS is verified live and admin/
 | No rate limiting | High | Application/report/invite/upload spam; free-tier exhaustion | Add DB constraints, cooldown tables, Edge Function checks, Cloudinary limits |
 | Payment proof not strongly validated | Medium | Fake/malicious/inappropriate payment evidence can be uploaded | Validate file type/size, moderation, admin verification status, payment provider integration |
 | Text input sanitization relies on React escaping | Medium | Stored text may become risky if later rendered as HTML or exported | Sanitize/validate text fields, length limits, profanity/abuse filters |
-| Admin SQL helper duplicates frontend email | Medium | Drift between `config/admin.ts` and SQL policy email can lock out or overgrant access | Store admin allowlist in DB and read from one source |
+| Admin SQL helper duplicates frontend identity | Medium | Drift between frontend source and SQL policy identity can lock out or overgrant access | Store admin allowlist in DB and read from one source |
 | Registration role trust | Medium | Signup metadata can request allowed role if not validated | Ensure database trigger validates allowed roles and prevents direct admin/agency role creation |
 | Missing password reset UI | Medium | Users cannot recover accounts through app UX | Add reset password flow using Supabase Auth |
 | No account deletion evidence retention | Medium | Compliance and dispute evidence gaps | Add deletion request lifecycle, export, anonymization, retention logic |

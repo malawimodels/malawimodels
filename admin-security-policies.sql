@@ -17,13 +17,14 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Helper function to check if current user is admin by email
+-- Helper function to check if current user is admin by email.
+-- Replace admin@example.com before applying this optional legacy policy file.
 CREATE OR REPLACE FUNCTION public.is_admin_email()
 RETURNS BOOLEAN AS $$
 BEGIN
   -- Check if the authenticated user's email matches admin email
   RETURN (
-    SELECT email = 'mphepobenedict@gmail.com'
+    SELECT email = 'admin@example.com'
     FROM auth.users
     WHERE id = auth.uid()
   );

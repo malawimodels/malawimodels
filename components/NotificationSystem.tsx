@@ -1,6 +1,7 @@
 
 import React, { createContext, useContext, useState, useCallback } from 'react';
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react';
+import ConfirmationModal from './ConfirmationModal';
 
 type NotificationType = 'success' | 'error' | 'info';
 
@@ -12,7 +13,19 @@ interface Notification {
 
 interface NotificationContextType {
   addNotification: (type: NotificationType, message: string) => void;
+  confirmAction: (options: ConfirmOptions) => Promise<boolean>;
 }
+
+type ConfirmOptions = {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  isDestructive?: boolean;
+};
+
+type ConfirmState = ConfirmOptions & {
+  resolve: (confirmed: boolean) => void;
+};
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
 
@@ -24,6 +37,7 @@ export const useNotification = () => {
 
 export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
 
   const addNotification = useCallback((type: NotificationType, message: string) => {
     const id = Math.random().toString(36).substr(2, 9);
@@ -39,9 +53,31 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     setNotifications(prev => prev.filter(n => n.id !== id));
   };
 
+  const confirmAction = useCallback((options: ConfirmOptions) => {
+    return new Promise<boolean>((resolve) => {
+      setConfirmState({ ...options, resolve });
+    });
+  }, []);
+
+  const closeConfirm = (confirmed: boolean) => {
+    setConfirmState((current) => {
+      current?.resolve(confirmed);
+      return null;
+    });
+  };
+
   return (
-    <NotificationContext.Provider value={{ addNotification }}>
+    <NotificationContext.Provider value={{ addNotification, confirmAction }}>
       {children}
+      <ConfirmationModal
+        isOpen={Boolean(confirmState)}
+        title={confirmState?.title || ''}
+        message={confirmState?.message || ''}
+        confirmLabel={confirmState?.confirmLabel}
+        isDestructive={confirmState?.isDestructive}
+        onConfirm={() => closeConfirm(true)}
+        onCancel={() => closeConfirm(false)}
+      />
       <div className="fixed bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-auto z-[100] flex flex-col gap-3 pointer-events-none items-center md:items-end">
         {notifications.map(n => (
           <div 

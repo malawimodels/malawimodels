@@ -1,90 +1,16 @@
-# 🚀 QUICK START: Admin Access
+# Admin Quick Start
 
-## 🎯 What You Need To Do NOW
+Admin access must be assigned in Supabase, not hardcoded in frontend source.
 
-### 1️⃣ Run This SQL in Supabase (2 minutes)
+## Setup
 
-Open Supabase Dashboard → SQL Editor → New Query → Paste this:
+1. Copy [set-admin-role.sql](set-admin-role.sql).
+2. Replace `admin@example.com` with the intended owner email before running it.
+3. Run the SQL in the Supabase SQL Editor.
+4. Run [admin-security-policies.sql](admin-security-policies.sql) only if you still need the legacy email-helper policies; prefer role/admin-permission based RLS for production.
 
-```sql
--- Set admin role
-UPDATE auth.users
-SET raw_user_meta_data = jsonb_set(
-    COALESCE(raw_user_meta_data, '{}'::jsonb),
-    '{role}',
-    '"admin"'
-)
-WHERE email = 'mphepobenedict@gmail.com';
+## Security Notes
 
-UPDATE public.users
-SET role = 'admin'
-WHERE email = 'mphepobenedict@gmail.com';
-
--- Add security
-CREATE OR REPLACE FUNCTION public.is_admin()
-RETURNS BOOLEAN AS $$
-BEGIN
-  RETURN (
-    SELECT role = 'admin'
-    FROM public.users
-    WHERE id = auth.uid()
-  );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
-CREATE OR REPLACE FUNCTION public.is_admin_email()
-RETURNS BOOLEAN AS $$
-BEGIN
-  RETURN (
-    SELECT email = 'mphepobenedict@gmail.com'
-    FROM auth.users
-    WHERE id = auth.uid()
-  );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-```
-
-Click **RUN** ✅
-
-### 2️⃣ Login & Test
-
-1. Login with `mphepobenedict@gmail.com`
-2. You should see **Admin** button (red, with shield icon) in top right
-3. Click it
-4. Admin dashboard loads! 🎉
-
-## ✅ What's Fixed
-
-- ✅ Email typo corrected (was 'gmai.com', now 'gmail.com')
-- ✅ Admin dashboard now loads (was broken)
-- ✅ 100% secure - only your email can access
-- ✅ Cannot be bypassed or faked
-- ✅ Multi-layer security (frontend + backend + database)
-
-## 🔒 Security
-
-**Only `mphepobenedict@gmail.com` can:**
-- See admin button
-- Access admin dashboard
-- View all users/projects
-- Approve agencies
-- Handle reports
-- Manage the platform
-
-**Everyone else:**
-- Cannot see admin features
-- Cannot access admin routes
-- Database blocks admin queries
-- Impossible to bypass
-
-## 📚 Full Documentation
-
-See **ADMIN_SECURITY_COMPLETE.md** for:
-- Detailed security explanation
-- All features list
-- Troubleshooting guide
-- How to change admin email
-
----
-
-**🎉 You're all set! Just run that SQL and you're done.**
+- Do not put owner emails, service-role keys, Cloudinary API secrets, or private API keys in client source.
+- The frontend only hides or shows UI. Supabase RLS is the real access control.
+- The public Supabase anon key is expected in the browser; protect data with policies, not by trying to hide the anon key.

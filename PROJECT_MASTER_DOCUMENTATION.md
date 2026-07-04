@@ -86,11 +86,11 @@ Environment variables:
 - `VITE_SUPABASE_URL`: Supabase project URL.
 - `VITE_SUPABASE_ANON_KEY`: Supabase anonymous public key.
 - `VITE_CLOUDINARY_CLOUD_NAME`: Cloudinary cloud name.
-- `VITE_CLOUDINARY_API_KEY`: public Cloudinary API key, used only where safe.
 - `VITE_CLOUDINARY_UPLOAD_PRESET_PROFILE`: optional profile upload preset.
 - `VITE_CLOUDINARY_UPLOAD_PRESET_GALLERY`: optional gallery upload preset.
 - `VITE_CLOUDINARY_UPLOAD_PRESET_PAYMENT`: optional payment proof upload preset.
-- `VITE_GEMINI_API_KEY` or `GEMINI_API_KEY`: configured in Vite but no production AI feature is implemented.
+
+Do not store Cloudinary API secrets, Supabase service-role keys, or private API keys in Vite/client environment variables.
 
 ## 3. Folder Structure and Major Files
 
@@ -105,7 +105,7 @@ Root files:
 - `supabase-schema.sql`: full intended PostgreSQL schema, indexes, functions, triggers, RLS enablement, and policies.
 - `supabase-profile-settings-migration.sql`: migration for profile settings improvements such as age/display-name cooldown support.
 - `supabase-agency-fix-migration.sql`: migration adding missing `agency_requests.tiktok` and `agency_requests.location` columns and location index.
-- `set-admin-role.sql`: SQL script that sets `mphepobenedict@gmail.com` to admin role in auth metadata and public users table.
+- `set-admin-role.sql`: SQL script template for assigning the owner/admin role in auth metadata and public users table.
 - `admin-security-policies.sql`: admin-oriented RLS helper functions and policies for existing tables.
 - Existing markdown files: setup, migration, authentication, database verification, realtime/admin fix summaries. These document previous repair work and deployment notes but are not the canonical architecture source; this file is.
 
@@ -123,8 +123,7 @@ Folders:
 
 Important files by responsibility:
 
-- `auth/AuthContext.tsx`: maps Supabase users into app users, tracks `user`, `role`, `loading`, `logout`, and `refreshRole`; fetches role from `users`; gives admin role if email matches `config/admin.ts`.
-- `config/admin.ts`: single frontend source of truth for admin email, currently `mphepobenedict@gmail.com`, with `isAdminEmail()` helper.
+- `auth/AuthContext.tsx`: maps Supabase users into app users, tracks `user`, `role`, `loading`, `logout`, and `refreshRole`; fetches role from `users`.
 - `components/Layout.tsx`: global navigation, role-sensitive links, shortlist badge, user dropdown, admin link visibility.
 - `components/NotificationSystem.tsx`: toast notification provider and hook.
 - `components/ThemeContext.tsx`: theme state and persistence.
@@ -311,7 +310,7 @@ Capabilities:
 Permissions:
 
 - Intended full platform moderation access via admin RLS functions and policies.
-- `set-admin-role.sql` and `config/admin.ts` currently target `mphepobenedict@gmail.com`.
+- `set-admin-role.sql` is a template and must be updated with the intended owner email before use.
 
 Restrictions:
 
@@ -368,7 +367,7 @@ Role assignment:
 
 - Initial role comes from registration metadata and `createUserProfile()`.
 - Role is persisted in `public.users.role`.
-- Admin role is special-cased through `config/admin.ts` and `set-admin-role.sql`.
+- Admin role should be assigned through database role/admin permission records and protected by RLS.
 - Agencies are users whose role becomes `agency`, typically after approval of an agency request.
 
 Authentication diagram:
@@ -949,7 +948,7 @@ Authentication security:
 Authorization security:
 
 - `ProtectedRoute` restricts dashboard routes by `UserRole`.
-- Admin route also permits exact admin email through `isAdminEmail()`.
+- Admin route permits users whose database role resolves to `admin`.
 - Components check roles before showing role-specific actions.
 - Database RLS is the real security boundary; frontend checks are UX and defense-in-depth, not sufficient alone.
 
@@ -968,7 +967,7 @@ Storage security:
 
 Admin protection:
 
-- Admin email is centralized in `config/admin.ts` and SQL scripts.
+- Admin ownership is managed in SQL/admin permission records, not frontend source.
 - The current design is single-admin and email based.
 - A more mature design would store admin users/permissions in a dedicated table with MFA and audit logs.
 

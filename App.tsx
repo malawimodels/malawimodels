@@ -4,9 +4,10 @@ import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { UserRole } from './types';
 import Layout from './components/Layout';
-import { NotificationProvider } from './components/NotificationSystem';
+import { NotificationProvider, useNotification } from './components/NotificationSystem';
 import { ThemeProvider } from './components/ThemeContext';
 import { clearSavedModels, getSavedModelIds, toggleSavedModel } from './services/supabase.service';
+import { resetAblyClient, subscribeToAblyEvent } from './services/ably.service';
 
 const Home = lazy(() => import('./pages/Home'));
 const Profile = lazy(() => import('./pages/Profile'));
@@ -22,6 +23,7 @@ const Shortlist = lazy(() => import('./pages/Shortlist'));
 const HelpCenter = lazy(() => import('./pages/HelpCenter'));
 const SafetyTrust = lazy(() => import('./pages/SafetyTrust'));
 const Contact = lazy(() => import('./pages/Contact'));
+const Appeal = lazy(() => import('./pages/Appeal'));
 const Admin = lazy(() => import('./pages/Admin'));
 
 export const ShortlistContext = createContext<{
@@ -68,6 +70,7 @@ const AppRoutes = () => {
       <Route path="/help" element={<HelpCenter />} />
       <Route path="/safety" element={<SafetyTrust />} />
       <Route path="/contact" element={<Contact />} />
+      <Route path="/appeal" element={<Appeal />} />
       
       {/* Admin Dashboard - Protected */}
       <Route 
@@ -120,6 +123,7 @@ const AppRoutes = () => {
 
 const AppContent: React.FC = () => {
   const { user } = useAuth();
+  const { addNotification } = useNotification();
   const [shortlist, setShortlist] = useState<string[]>([]);
 
   useEffect(() => {
@@ -141,6 +145,23 @@ const AppContent: React.FC = () => {
       active = false;
     };
   }, [user?.uid]);
+
+  useEffect(() => {
+    if (!user) {
+      resetAblyClient();
+      return undefined;
+    }
+
+    return subscribeToAblyEvent(`user:${user.uid}:notifications`, 'notification.created', (payload) => {
+      const title = payload?.title || 'New notification';
+      const message = payload?.message || 'You have a new update.';
+      addNotification('info', `${title}: ${message}`);
+
+      if ('Notification' in window && window.Notification.permission === 'granted') {
+        new window.Notification(title, { body: message, tag: payload?.link || title });
+      }
+    });
+  }, [user?.uid, addNotification]);
 
   const persistGuestShortlist = (next: string[]) => {
     window.localStorage.setItem('malawi_models_shortlist', JSON.stringify(next));

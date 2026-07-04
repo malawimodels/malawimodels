@@ -5,6 +5,7 @@ import { ModelProfile, AgencyInvite } from '../../types';
 import { subscribeToSearchModels, inviteModelToAgency, getAgencies, subscribeToAgencyOutgoingInvites } from '../../services/supabase.service';
 import { UserPlus, Search, Send, CheckCircle, XCircle } from 'lucide-react';
 import OptimizedImage from '../OptimizedImage';
+import { AVATAR_PLACEHOLDER_IMAGE } from '../../utils/placeholders';
 
 const AgencyRecruitTalent: React.FC = () => {
     const { user } = useAuth();
@@ -105,7 +106,7 @@ const AgencyRecruitTalent: React.FC = () => {
                         availableRecruits.map(model => (
                             <div key={model.uid} className="bg-white/5 p-4 rounded-xl flex items-center justify-between border border-transparent hover:border-brand-primary/20 transition-all">
                                 <div className="flex items-center gap-4">
-                                    <OptimizedImage src={model.media.images[0] || 'https://via.placeholder.com/150'} variant="avatar" className="w-10 h-10 rounded-lg object-cover" alt={model.displayName} />
+                                    <OptimizedImage src={model.media.images[0] || AVATAR_PLACEHOLDER_IMAGE} variant="avatar" className="w-10 h-10 rounded-lg object-cover" alt={model.displayName} />
                                     <div>
                                         <h4 className="text-white font-bold text-sm">{model.displayName}</h4>
                                         <p className="text-[10px] text-brand-muted">{model.location}</p>

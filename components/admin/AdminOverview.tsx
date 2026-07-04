@@ -35,7 +35,7 @@ const AdminOverview: React.FC<AdminOverviewProps> = ({ users, projects, requests
         clients: users.filter(u => u.role === 'client').length,
         agencies: users.filter(u => u.role === 'agency').length,
         activeProjects: projects.filter(p => p.status === 'OPEN').length,
-        pendingRequests: requests.length
+        pendingRequests: requests.filter((request) => request.status === 'pending').length
     };
 
     return (

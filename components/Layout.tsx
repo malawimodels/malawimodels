@@ -4,10 +4,12 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { ShortlistContext } from '../App';
 import { UserRole } from '../types';
-import { Menu, X, User, LogOut, Sparkles, PlusCircle, Shield, Building } from 'lucide-react';
+import { Menu, X, User, LogOut, Sparkles, PlusCircle, Shield, Building, Bell } from 'lucide-react';
+import { useNotification } from './NotificationSystem';
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { role, user, logout } = useAuth();
+  const { addNotification } = useNotification();
   const { shortlist } = useContext(ShortlistContext);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
@@ -32,6 +34,16 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     await logout();
     navigate('/');
     setIsMenuOpen(false);
+  };
+
+  const handleEnableDeviceAlerts = async () => {
+    if (!('Notification' in window)) {
+      addNotification('error', 'Device notifications are not supported on this browser.');
+      return;
+    }
+
+    const permission = await window.Notification.requestPermission();
+    addNotification(permission === 'granted' ? 'success' : 'info', permission === 'granted' ? 'Device alerts enabled.' : 'Device alerts were not enabled.');
   };
 
   const isHome = location.pathname === '/';
@@ -94,7 +106,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                  </>
               )}
 
-              {/* Admin Link - Only for specific email */}
+              {/* Admin Link */}
               {isAdmin && (
                 <Link to="/admin" className="text-sm font-bold text-red-500 hover:text-red-400 transition-colors uppercase tracking-wide flex items-center bg-red-500/10 px-3 py-1 rounded-full border border-red-500/20">
                   <Shield className="w-4 h-4 mr-1.5" /> Admin
@@ -140,6 +152,11 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                       <div className="px-4 py-2 border-b border-white/5 text-xs text-brand-muted truncate">
                          {user.email}
                       </div>
+                      {'Notification' in window && window.Notification.permission !== 'granted' && (
+                        <button onClick={handleEnableDeviceAlerts} className="w-full text-left px-4 py-2 text-sm text-brand-muted hover:bg-white/5 hover:text-white flex items-center">
+                          <Bell className="w-4 h-4 mr-2" /> Enable Device Alerts
+                        </button>
+                      )}
                       <button onClick={handleLogout} className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-500/10 flex items-center">
                         <LogOut className="w-4 h-4 mr-2" /> Logout
                       </button>
@@ -184,7 +201,14 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                  </Link>
                )}
                {user && (
-                 <button onClick={handleLogout} className="w-full text-left px-3 py-3 text-base text-red-500 hover:bg-white/5">Logout</button>
+                 <>
+                   {'Notification' in window && window.Notification.permission !== 'granted' && (
+                     <button onClick={handleEnableDeviceAlerts} className="w-full text-left px-3 py-3 text-base text-brand-text hover:bg-white/5 flex items-center">
+                       <Bell className="w-4 h-4 mr-2" /> Enable Device Alerts
+                     </button>
+                   )}
+                   <button onClick={handleLogout} className="w-full text-left px-3 py-3 text-base text-red-500 hover:bg-white/5">Logout</button>
+                 </>
                )}
             </div>
           </div>
@@ -226,6 +250,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               <ul className="space-y-4 text-sm text-brand-muted">
                 <li><Link to="/help" className="hover:text-brand-primary transition-colors">Help Center</Link></li>
                 <li><Link to="/safety" className="hover:text-brand-primary transition-colors">Safety & Trust</Link></li>
+                <li><Link to="/appeal" className="hover:text-brand-primary transition-colors">Account Appeal</Link></li>
                 <li><Link to="/contact" className="hover:text-brand-primary transition-colors">Contact Us</Link></li>
               </ul>
             </div>

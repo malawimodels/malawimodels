@@ -13,12 +13,16 @@ import AdminProjects from '../components/admin/AdminProjects';
 import AdminRequests from '../components/admin/AdminRequests';
 import AdminReports from '../components/admin/AdminReports';
 import AdminLeaveRequests from '../components/admin/AdminLeaveRequests';
+import { useNotification } from '../components/NotificationSystem';
+import AdminAppeals from '../components/admin/AdminAppeals';
+import MessagingCenter from '../components/dashboard/MessagingCenter';
 
 const Admin: React.FC = () => {
   const { user, role, loading: authLoading } = useAuth();
   const navigate = useNavigate();
+  const { addNotification } = useNotification();
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'clients' | 'projects' | 'agency_requests' | 'reports' | 'leave_requests'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'clients' | 'projects' | 'agency_requests' | 'reports' | 'leave_requests' | 'appeals' | 'messages'>('overview');
   const [users, setUsers] = useState<UserData[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [requests, setRequests] = useState<AgencyRequest[]>([]);
@@ -107,7 +111,7 @@ const Admin: React.FC = () => {
                 setUsers(prev => prev.map(u => u.uid === uid ? { ...u, verified: !currentStatus } : u));
                 closeConfirm();
             } catch (e) {
-                alert("Permission Denied.");
+              addNotification('error', 'Permission denied.');
             }
         }
     });
@@ -127,7 +131,7 @@ const Admin: React.FC = () => {
                 setUsers(prev => prev.map(u => u.uid === uid ? { ...u, isActive: !currentStatus } : u));
                 closeConfirm();
             } catch (e) {
-                alert("Permission Denied.");
+              addNotification('error', 'Permission denied.');
             }
         }
     });
@@ -146,7 +150,7 @@ const Admin: React.FC = () => {
                 setUsers(prev => prev.filter(u => u.uid !== uid));
                 closeConfirm();
             } catch (e) {
-                alert("Permission Denied.");
+              addNotification('error', 'Permission denied.');
             }
         }
     });
@@ -165,7 +169,7 @@ const Admin: React.FC = () => {
                 setProjects(prev => prev.filter(p => p.id !== id));
                 closeConfirm();
             } catch (e) {
-                alert("Permission Denied.");
+              addNotification('error', 'Permission denied.');
             }
         }
     });
@@ -182,7 +186,7 @@ const Admin: React.FC = () => {
                 await approveAgencyRequest(req);
                 closeConfirm();
             } catch (e) {
-                alert("Failed to approve agency.");
+              addNotification('error', 'Failed to approve agency.');
             }
         }
     });
@@ -219,7 +223,7 @@ const Admin: React.FC = () => {
                   await updateReportStatus(reportId, ReportStatus.WARNING_SENT);
                   closeConfirm();
               } catch (e) {
-                  alert("Failed to send warning.");
+                  addNotification('error', 'Failed to send warning.');
               }
           }
       });
@@ -253,50 +257,62 @@ const Admin: React.FC = () => {
             <p className="text-brand-muted text-sm mt-1">Authorized Access: {user?.email}</p>
           </div>
           
-          <div className="flex flex-wrap justify-center gap-2 bg-white/5 p-1 rounded-xl w-full md:w-auto">
+          <div className="dashboard-tab-list">
              <button 
                 onClick={() => setActiveTab('overview')}
-                className={`flex-grow md:flex-grow-0 px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center ${activeTab === 'overview' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}
+                className={`dashboard-tab ${activeTab === 'overview' ? 'dashboard-tab--active dashboard-tab--active-neutral' : 'dashboard-tab--idle'}`}
              >
-               <LayoutDashboard className="w-4 h-4 mr-2" /> Overview
+               <LayoutDashboard /> Overview
              </button>
              <button 
                 onClick={() => setActiveTab('users')}
-                className={`flex-grow md:flex-grow-0 px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center ${activeTab === 'users' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}
+                className={`dashboard-tab ${activeTab === 'users' ? 'dashboard-tab--active dashboard-tab--active-neutral' : 'dashboard-tab--idle'}`}
              >
-               <User className="w-4 h-4 mr-2" /> Users
+               <User /> Users
              </button>
              <button
                onClick={() => setActiveTab('clients')}
-               className={`flex-grow md:flex-grow-0 px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center ${activeTab === 'clients' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}
+               className={`dashboard-tab ${activeTab === 'clients' ? 'dashboard-tab--active dashboard-tab--active-neutral' : 'dashboard-tab--idle'}`}
              >
-              <UserCheck className="w-4 h-4 mr-2" /> Clients
+              <UserCheck /> Clients
              </button>
              <button
                 onClick={() => setActiveTab('projects')}
-                className={`flex-grow md:flex-grow-0 px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center ${activeTab === 'projects' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}
+                className={`dashboard-tab ${activeTab === 'projects' ? 'dashboard-tab--active dashboard-tab--active-neutral' : 'dashboard-tab--idle'}`}
              >
-               <Briefcase className="w-4 h-4 mr-2" /> Projects
+               <Briefcase /> Projects
              </button>
              <button
                 onClick={() => setActiveTab('agency_requests')}
-                className={`flex-grow md:flex-grow-0 px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center ${activeTab === 'agency_requests' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}
+                className={`dashboard-tab ${activeTab === 'agency_requests' ? 'dashboard-tab--active dashboard-tab--active-neutral' : 'dashboard-tab--idle'}`}
              >
-               <Building className="w-4 h-4 mr-2" /> Requests
-               {requests.length > 0 && <span className="ml-2 bg-red-500 text-white px-1.5 rounded-full text-[10px]">{requests.length}</span>}
+               <Building /> Requests
+               {requests.filter((request) => request.status === 'pending').length > 0 && <span className="ml-2 bg-red-500 text-white px-1.5 rounded-full text-[10px]">{requests.filter((request) => request.status === 'pending').length}</span>}
              </button>
              <button
                 onClick={() => setActiveTab('reports')}
-                className={`flex-grow md:flex-grow-0 px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center ${activeTab === 'reports' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}
+                className={`dashboard-tab ${activeTab === 'reports' ? 'dashboard-tab--active dashboard-tab--active-neutral' : 'dashboard-tab--idle'}`}
              >
-               <Flag className="w-4 h-4 mr-2" /> Reports
+               <Flag /> Reports
                {reports.filter(r => r.status === ReportStatus.PENDING).length > 0 && <span className="ml-2 bg-red-500 text-white px-1.5 rounded-full text-[10px]">{reports.filter(r => r.status === ReportStatus.PENDING).length}</span>}
              </button>
              <button
-                onClick={() => setActiveTab('leave_requests')}
-                className={`flex-grow md:flex-grow-0 px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center ${activeTab === 'leave_requests' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}
+                onClick={() => setActiveTab('messages')}
+                className={`dashboard-tab ${activeTab === 'messages' ? 'dashboard-tab--active dashboard-tab--active-neutral' : 'dashboard-tab--idle'}`}
              >
-               <LogOut className="w-4 h-4 mr-2" /> Leave Req.
+               Messages
+             </button>
+             <button
+                onClick={() => setActiveTab('leave_requests')}
+                className={`dashboard-tab ${activeTab === 'leave_requests' ? 'dashboard-tab--active dashboard-tab--active-neutral' : 'dashboard-tab--idle'}`}
+             >
+               <LogOut /> Leave Req.
+             </button>
+             <button
+                onClick={() => setActiveTab('appeals')}
+                className={`dashboard-tab ${activeTab === 'appeals' ? 'dashboard-tab--active dashboard-tab--active-neutral' : 'dashboard-tab--idle'}`}
+             >
+               Appeals
              </button>
           </div>
         </div>
@@ -391,9 +407,17 @@ const Admin: React.FC = () => {
           />
       )}
 
+        {activeTab === 'messages' && user && (
+          <MessagingCenter currentUserId={user.uid} currentRole={UserRole.ADMIN} />
+        )}
+
       {activeTab === 'leave_requests' && (
           <AdminLeaveRequests />
       )}
+
+        {activeTab === 'appeals' && (
+          <AdminAppeals />
+        )}
     </div>
   );
 };

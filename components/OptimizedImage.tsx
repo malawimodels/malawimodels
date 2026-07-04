@@ -42,7 +42,7 @@ const OptimizedImage: React.FC<OptimizedImageProps> = ({
   }, [optimizedSrc]);
 
   const handleLoad: React.ReactEventHandler<HTMLImageElement> = (event) => {
-    if (optimizedSrc && displaySrc === optimizedSrc) {
+    if (optimizedSrc && displaySrc === optimizedSrc && !optimizedSrc.startsWith('data:')) {
       cacheImageFromUrl(optimizedSrc).catch(() => {});
     }
 

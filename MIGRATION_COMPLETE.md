@@ -67,9 +67,12 @@ VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ### Cloudinary
 ```env
 VITE_CLOUDINARY_CLOUD_NAME=dbonen1to
-VITE_CLOUDINARY_API_KEY=968861852419891
-VITE_CLOUDINARY_API_SECRET=x_R1HLUWReKUUiE_xxRAkl2kIsQ
+VITE_CLOUDINARY_UPLOAD_PRESET_PROFILE=ml_default
+VITE_CLOUDINARY_UPLOAD_PRESET_GALLERY=ml_default
+VITE_CLOUDINARY_UPLOAD_PRESET_PAYMENT=ml_default
 ```
+
+Cloudinary API secrets must never be placed in Vite/client environment variables. Client uploads should use unsigned upload presets only.
 
 ---
 

@@ -34,11 +34,11 @@ CREATE INDEX IF NOT EXISTS idx_admin_permissions_user_active
 CREATE INDEX IF NOT EXISTS idx_admin_permissions_role
   ON admin_permissions(role);
 
--- Bootstrap current platform owner. Remove or change after creating a second owner.
+-- Bootstrap the platform owner. Replace admin@example.com before applying.
 INSERT INTO admin_permissions (user_id, role, permissions, is_active)
 SELECT id, 'owner', '{"all": true}'::jsonb, TRUE
 FROM users
-WHERE lower(email) = 'mphepobenedict@gmail.com'
+WHERE lower(email) = 'admin@example.com'
 ON CONFLICT (user_id) DO UPDATE SET
   role = EXCLUDED.role,
   permissions = EXCLUDED.permissions,
@@ -47,7 +47,7 @@ ON CONFLICT (user_id) DO UPDATE SET
 
 UPDATE users
 SET role = 'admin'
-WHERE lower(email) = 'mphepobenedict@gmail.com';
+WHERE lower(email) = 'admin@example.com';
 
 CREATE OR REPLACE FUNCTION public.is_platform_admin()
 RETURNS BOOLEAN AS $$

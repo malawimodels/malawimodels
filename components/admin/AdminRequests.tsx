@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { AgencyRequest } from '../../types';
+import { AgencyRequest, AgencyRequestStatus } from '../../types';
 import { MessageCircle, ExternalLink, CheckCircle, X, Facebook, Instagram, Video, MapPin, Users, ChevronDown, ChevronUp } from 'lucide-react';
 import OptimizedImage from '../OptimizedImage';
 
@@ -12,6 +12,14 @@ interface AdminRequestsProps {
 
 const AdminRequests: React.FC<AdminRequestsProps> = ({ requests, onApprove, onReject }) => {
     const [expandedId, setExpandedId] = useState<string | null>(null);
+    const pendingRequests = requests.filter((request) => request.status === AgencyRequestStatus.PENDING);
+    const processedRequests = requests.filter((request) => request.status !== AgencyRequestStatus.PENDING);
+
+    const statusStyles: Record<AgencyRequestStatus, string> = {
+        [AgencyRequestStatus.PENDING]: 'bg-brand-primary/10 text-brand-primary border-brand-primary/20',
+        [AgencyRequestStatus.APPROVED]: 'bg-green-500/10 text-green-400 border-green-500/20',
+        [AgencyRequestStatus.REJECTED]: 'bg-red-500/10 text-red-400 border-red-500/20',
+    };
 
     const toggleExpand = (id: string) => {
         setExpandedId(expandedId === id ? null : id);
@@ -21,10 +29,18 @@ const AdminRequests: React.FC<AdminRequestsProps> = ({ requests, onApprove, onRe
         <div className="space-y-4 animate-fade-in">
             {requests.length === 0 ? (
                 <div className="text-center py-10 bg-brand-surface rounded-xl border border-white/5 text-brand-muted">
-                    No pending agency requests.
+                    No agency requests yet.
                 </div>
             ) : (
-                requests.map(req => (
+                <>
+                {pendingRequests.length > 0 && (
+                    <div className="flex items-center justify-between gap-4">
+                        <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-brand-muted">Pending Review</h3>
+                        <span className="text-xs font-bold text-brand-primary bg-brand-primary/10 border border-brand-primary/20 rounded-full px-3 py-1">{pendingRequests.length} pending</span>
+                    </div>
+                )}
+
+                {[...pendingRequests, ...processedRequests].map(req => (
                     <div key={req.id} className="bg-brand-surface rounded-xl border border-white/5 overflow-hidden transition-all">
                         {/* Summary Header */}
                         <div 
@@ -35,7 +51,12 @@ const AdminRequests: React.FC<AdminRequestsProps> = ({ requests, onApprove, onRe
                                 <OptimizedImage src={req.logoUrl} variant="avatar" alt="Logo" className="w-full h-full object-cover" />
                             </div>
                             <div className="flex-grow text-center md:text-left">
-                                <h3 className="text-xl font-bold text-white mb-1">{req.agencyName}</h3>
+                                <div className="flex flex-col md:flex-row md:items-center gap-2 mb-1">
+                                    <h3 className="text-xl font-bold text-white">{req.agencyName}</h3>
+                                    <span className={`w-fit mx-auto md:mx-0 text-[11px] font-bold uppercase tracking-wide border rounded-full px-2.5 py-1 ${statusStyles[req.status] || statusStyles[AgencyRequestStatus.PENDING]}`}>
+                                        {req.status === AgencyRequestStatus.APPROVED ? 'Accepted' : req.status}
+                                    </span>
+                                </div>
                                 <div className="text-sm text-brand-muted flex flex-col md:flex-row gap-2 md:gap-4 items-center md:items-start">
                                     <span>Applicant: {req.applicantName}</span>
                                     <span className="hidden md:inline">•</span>
@@ -116,6 +137,12 @@ const AdminRequests: React.FC<AdminRequestsProps> = ({ requests, onApprove, onRe
                                 )}
 
                                 <div className="flex justify-end gap-3 pt-4 border-t border-white/10">
+                                    {req.status !== AgencyRequestStatus.PENDING ? (
+                                        <div className="text-sm font-bold text-brand-muted px-4 py-2">
+                                            {req.status === AgencyRequestStatus.APPROVED ? 'Accepted and moved to agency accounts.' : 'Rejected and archived.'}
+                                        </div>
+                                    ) : (
+                                        <>
                                     <button 
                                         onClick={() => onReject(req.id)}
                                         className="px-6 py-2 bg-white/5 hover:bg-red-500/10 hover:text-red-500 text-brand-muted rounded-lg transition-all font-bold flex items-center"
@@ -128,11 +155,18 @@ const AdminRequests: React.FC<AdminRequestsProps> = ({ requests, onApprove, onRe
                                     >
                                         <CheckCircle className="w-4 h-4 mr-2" /> Approve Agency
                                     </button>
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         )}
                     </div>
                 ))
+                }
+                {pendingRequests.length === 0 && processedRequests.length > 0 && (
+                    <div className="text-center py-4 text-sm text-brand-muted">No pending agency requests. Processed requests remain listed for audit history.</div>
+                )}
+                </>
             )}
         </div>
     );

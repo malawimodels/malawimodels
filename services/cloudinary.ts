@@ -8,13 +8,15 @@ const CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
 const UPLOAD_PRESET_PROFILE = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET_PROFILE || 'malawi_models_profiles';
 const UPLOAD_PRESET_GALLERY = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET_GALLERY || 'malawi_models_gallery';
 const UPLOAD_PRESET_PAYMENT = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET_PAYMENT || 'malawi_models_payments';
+const UPLOAD_PRESET_VOICE = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET_VOICE || 'malawi_models_voice';
 
 const MAX_ORIGINAL_IMAGE_MB = 25;
+const MAX_VOICE_NOTE_MB = 15;
 
 /**
  * Upload type for different image categories
  */
-export type UploadType = 'profile' | 'gallery' | 'payment' | 'agency-logo';
+export type UploadType = 'profile' | 'gallery' | 'payment' | 'agency-logo' | 'voice-note';
 
 /**
  * Cloudinary upload response
@@ -118,6 +120,8 @@ function getUploadPreset(type: UploadType): string {
       return UPLOAD_PRESET_GALLERY;
     case 'payment':
       return UPLOAD_PRESET_PAYMENT;
+    case 'voice-note':
+      return UPLOAD_PRESET_VOICE;
     default:
       return UPLOAD_PRESET_PROFILE;
   }
@@ -131,9 +135,45 @@ function getFriendlyUploadType(type: UploadType): string {
       return 'gallery image';
     case 'payment':
       return 'payment proof';
+    case 'voice-note':
+      return 'voice note';
     default:
       return 'profile image';
   }
+}
+
+export async function uploadVoiceNote(blob: Blob): Promise<CloudinaryUploadResponse> {
+  if (!CLOUD_NAME) {
+    throw new Error('Cloudinary not configured. Please set VITE_CLOUDINARY_CLOUD_NAME in .env.local');
+  }
+
+  if (blob.size > MAX_VOICE_NOTE_MB * 1024 * 1024) {
+    throw new Error(`Voice note is too large. Please keep it under ${MAX_VOICE_NOTE_MB}MB.`);
+  }
+
+  const formData = new FormData();
+  formData.append('file', blob, `voice-note-${Date.now()}.webm`);
+  formData.append('upload_preset', UPLOAD_PRESET_VOICE);
+  formData.append('resource_type', 'video');
+
+  const response = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/video/upload`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(await getCloudinaryError(response, UPLOAD_PRESET_VOICE));
+  }
+
+  const data = await response.json();
+  return {
+    url: data.secure_url,
+    publicId: data.public_id,
+    width: data.width || 0,
+    height: data.height || 0,
+    format: data.format,
+    bytes: data.bytes,
+  };
 }
 
 async function getCloudinaryError(response: Response, preset: string): Promise<string> {

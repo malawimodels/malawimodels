@@ -56,7 +56,7 @@ Run `supabase-production-hardening.sql` after the current base schema migration.
 
 Important behavior:
 
-- The only owner admin bootstrapped by SQL is `mphepobenedict@gmail.com`.
+- The owner admin is bootstrapped by SQL using a placeholder email that must be replaced before applying.
 - The app checks admin status through `admin_permissions`, not through a client-side email bypass.
 - There is no `public.agencies` table; agencies remain users with agency role/profile data.
 

@@ -6,6 +6,7 @@ import { ModelProfile, Review, UserData } from '../types';
 import { MapPin, Share2, CheckCircle, Camera, Heart, PlayCircle, Building, Star, Maximize2, X } from 'lucide-react';
 import { ShortlistContext } from '../App';
 import OptimizedImage from '../components/OptimizedImage';
+import { MODEL_PLACEHOLDER_IMAGE } from '../utils/placeholders';
 import { useNotification } from '../components/NotificationSystem';
 
 const Profile: React.FC = () => {
@@ -61,7 +62,7 @@ const Profile: React.FC = () => {
   if (!model) return <div className="min-h-screen flex items-center justify-center bg-brand-bg text-white">Loading...</div>;
 
   const isShortlisted = shortlist.includes(model.uid);
-  const mainImage = model.media?.images?.[0] || 'https://via.placeholder.com/400x600';
+  const mainImage = model.media?.images?.[0] || MODEL_PLACEHOLDER_IMAGE;
 
   // Helper to extract YouTube ID
   const getYouTubeEmbedUrl = (url: string) => {
