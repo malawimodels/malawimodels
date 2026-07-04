@@ -750,7 +750,11 @@ const fetchSearchModelsViaRpc = async (filters: SearchFilters, limit: number, pa
   });
 
   if (error) {
-    if (isMissingRelationError(error, 'search_models_paginated') || `${error.message || ''}`.includes('function')) {
+    if (
+      isMissingRelationError(error, 'search_models_paginated') ||
+      `${error.message || ''}`.includes('function') ||
+      isMissingColumnError(error, 'age')
+    ) {
       return null;
     }
     throw error;
@@ -795,14 +799,6 @@ const fetchSearchModelsDirect = async (filters: SearchFilters, limit: number, pa
     filters.maxHeight < DEFAULT_SEARCH_MAX_HEIGHT
   ) {
     query = query.lte('height', filters.maxHeight);
-  }
-
-  if (filters.minAge) {
-    query = query.gte('age', filters.minAge);
-  }
-
-  if (filters.maxAge) {
-    query = query.lte('age', filters.maxAge);
   }
 
   if (filters.agencyRepresented === true) {

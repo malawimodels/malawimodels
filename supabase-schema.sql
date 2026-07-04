@@ -691,7 +691,7 @@ BEGIN
     u.reviews_count,
     u.total_projects,
     u.completed_projects,
-    m.age,
+    NULL::INTEGER AS age,
     m.height,
     m.gender,
     m.skin_tone,
@@ -732,8 +732,6 @@ BEGIN
     AND (p_skin_tones IS NULL OR m.skin_tone = ANY(p_skin_tones))
     AND (p_min_height <= 0 OR m.height >= p_min_height)
     AND (p_max_height >= 300 OR m.height <= p_max_height)
-    AND (p_min_age IS NULL OR m.age >= p_min_age)
-    AND (p_max_age IS NULL OR m.age <= p_max_age)
     AND (NOT p_verified_only OR u.verified = TRUE)
     AND (p_agency_represented IS NULL OR (p_agency_represented = TRUE AND m.agency_id IS NOT NULL) OR (p_agency_represented = FALSE AND m.agency_id IS NULL))
     AND (NOT p_only_available OR m.availability = TRUE)
