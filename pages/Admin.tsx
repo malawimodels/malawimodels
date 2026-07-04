@@ -3,11 +3,12 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { getAllUsers, getAllProjectsAdmin, toggleUserVerification, toggleUserStatus, deleteUserPermanently, deleteProject, subscribeToAgencyRequests, approveAgencyRequest, rejectAgencyRequest, subscribeToReports, updateReportStatus, sendAdminWarning } from '../services/supabase.service';
 import { UserData, Project, UserRole, AgencyRequest, Report, ReportStatus } from '../types';
-import { Search, Shield, User, Briefcase, Building, Flag, LayoutDashboard, LogOut } from 'lucide-react';
+import { Search, Shield, User, Briefcase, Building, Flag, LayoutDashboard, LogOut, UserCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import ConfirmationModal from '../components/ConfirmationModal';
 import AdminOverview from '../components/admin/AdminOverview';
 import AdminUsers from '../components/admin/AdminUsers';
+import AdminClients from '../components/admin/AdminClients';
 import AdminProjects from '../components/admin/AdminProjects';
 import AdminRequests from '../components/admin/AdminRequests';
 import AdminReports from '../components/admin/AdminReports';
@@ -17,7 +18,7 @@ const Admin: React.FC = () => {
   const { user, role, loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'projects' | 'agency_requests' | 'reports' | 'leave_requests'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'clients' | 'projects' | 'agency_requests' | 'reports' | 'leave_requests'>('overview');
   const [users, setUsers] = useState<UserData[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [requests, setRequests] = useState<AgencyRequest[]>([]);
@@ -265,27 +266,33 @@ const Admin: React.FC = () => {
              >
                <User className="w-4 h-4 mr-2" /> Users
              </button>
-             <button 
+             <button
+               onClick={() => setActiveTab('clients')}
+               className={`flex-grow md:flex-grow-0 px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center ${activeTab === 'clients' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}
+             >
+              <UserCheck className="w-4 h-4 mr-2" /> Clients
+             </button>
+             <button
                 onClick={() => setActiveTab('projects')}
                 className={`flex-grow md:flex-grow-0 px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center ${activeTab === 'projects' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}
              >
                <Briefcase className="w-4 h-4 mr-2" /> Projects
              </button>
-             <button 
+             <button
                 onClick={() => setActiveTab('agency_requests')}
                 className={`flex-grow md:flex-grow-0 px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center ${activeTab === 'agency_requests' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}
              >
                <Building className="w-4 h-4 mr-2" /> Requests
                {requests.length > 0 && <span className="ml-2 bg-red-500 text-white px-1.5 rounded-full text-[10px]">{requests.length}</span>}
              </button>
-             <button 
+             <button
                 onClick={() => setActiveTab('reports')}
                 className={`flex-grow md:flex-grow-0 px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center ${activeTab === 'reports' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}
              >
                <Flag className="w-4 h-4 mr-2" /> Reports
                {reports.filter(r => r.status === ReportStatus.PENDING).length > 0 && <span className="ml-2 bg-red-500 text-white px-1.5 rounded-full text-[10px]">{reports.filter(r => r.status === ReportStatus.PENDING).length}</span>}
              </button>
-             <button 
+             <button
                 onClick={() => setActiveTab('leave_requests')}
                 className={`flex-grow md:flex-grow-0 px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center justify-center ${activeTab === 'leave_requests' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}
              >
@@ -301,11 +308,11 @@ const Admin: React.FC = () => {
         )}
 
         {/* Filter Bar (Only show for certain tabs) */}
-        {['users', 'projects'].includes(activeTab) && (
+        {['users', 'clients', 'projects'].includes(activeTab) && (
             <div className="flex flex-col md:flex-row gap-4">
             <div className="relative flex-grow">
-                <input 
-                type="text" 
+                <input
+                type="text"
                 placeholder={`Search ${activeTab}...`}
                 className="w-full pl-10 pr-4 py-3 bg-brand-surface border border-white/10 rounded-xl text-white focus:border-brand-primary focus:outline-none transition-colors"
                 value={searchTerm}
@@ -315,7 +322,7 @@ const Admin: React.FC = () => {
             </div>
             
             {activeTab === 'users' && (
-                <select 
+                <select
                 className="bg-brand-surface border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none"
                 value={filterRole}
                 onChange={(e) => setFilterRole(e.target.value)}
@@ -337,10 +344,21 @@ const Admin: React.FC = () => {
       )}
 
       {activeTab === 'users' && (
-          <AdminUsers 
-            users={users} 
-            searchTerm={searchTerm} 
+          <AdminUsers
+            users={users}
+            searchTerm={searchTerm}
             filterRole={filterRole}
+            onVerify={handleVerifyUser}
+            onBlock={handleBlockUser}
+            onDelete={handleDeleteUser}
+          />
+      )}
+
+      {activeTab === 'clients' && (
+          <AdminClients
+            users={users}
+            projects={projects}
+            searchTerm={searchTerm}
             onVerify={handleVerifyUser}
             onBlock={handleBlockUser}
             onDelete={handleDeleteUser}

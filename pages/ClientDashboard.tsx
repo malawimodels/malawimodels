@@ -11,6 +11,7 @@ import ClientBookingsView from '../components/dashboard/ClientBookingsView';
 import ClientProjectsView from '../components/dashboard/ClientProjectsView';
 import ClientOverview from '../components/dashboard/ClientOverview';
 import ClientProfileSettings from '../components/dashboard/ClientProfileSettings';
+import ReviewHistoryView from '../components/dashboard/ReviewHistoryView';
 import OptimizedImage from '../components/OptimizedImage';
 
 const ClientDashboard: React.FC = () => {
@@ -18,7 +19,7 @@ const ClientDashboard: React.FC = () => {
   const navigate = useNavigate();
   const { addNotification } = useNotification();
   const [userData, setUserData] = useState<UserData | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'projects' | 'profile' | 'bookings'>('projects');
+  const [activeTab, setActiveTab] = useState<'overview' | 'projects' | 'profile' | 'bookings' | 'reviews'>('projects');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -96,6 +97,7 @@ const ClientDashboard: React.FC = () => {
              <button onClick={() => setActiveTab('overview')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow md:flex-grow-0 transition-all ${activeTab === 'overview' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Overview</button>
              <button onClick={() => setActiveTab('projects')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow md:flex-grow-0 transition-all ${activeTab === 'projects' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Projects</button>
              <button onClick={() => setActiveTab('bookings')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow md:flex-grow-0 transition-all ${activeTab === 'bookings' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Bookings</button>
+             <button onClick={() => setActiveTab('reviews')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow md:flex-grow-0 transition-all ${activeTab === 'reviews' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Reviews</button>
              <button onClick={() => setActiveTab('profile')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow md:flex-grow-0 transition-all ${activeTab === 'profile' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}>Settings</button>
           </div>
        </div>
@@ -110,6 +112,15 @@ const ClientDashboard: React.FC = () => {
 
        {activeTab === 'bookings' && (
            <ClientBookingsView />
+       )}
+
+       {activeTab === 'reviews' && user && (
+           <ReviewHistoryView
+               mode="authored"
+               userId={user.uid}
+               title="Reviews You Left"
+               emptyText="You have not reviewed any completed bookings yet."
+           />
        )}
 
        {activeTab === 'profile' && userData && (

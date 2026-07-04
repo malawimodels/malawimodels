@@ -109,6 +109,7 @@ CREATE TABLE models (
   -- Analytics
   views INTEGER DEFAULT 0,
   ranking_score DECIMAL(10,2) DEFAULT 0.00,
+  profile_completeness INTEGER DEFAULT 0 CHECK (profile_completeness >= 0 AND profile_completeness <= 100),
   
   -- Timestamps
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -256,6 +257,11 @@ CREATE TABLE bookings (
   status TEXT DEFAULT 'negotiating' CHECK (status IN (
     'negotiating', 'scheduled', 'completed', 'cancelled', 'reported'
   )),
+
+  -- Date and cancellation metadata for review eligibility
+  event_date DATE,
+  cancellation_reason TEXT,
+  cancelled_by UUID REFERENCES users(id) ON DELETE SET NULL,
   
   -- Current Offer
   current_offer_amount INTEGER DEFAULT 0,
@@ -280,6 +286,7 @@ CREATE INDEX idx_bookings_model ON bookings(model_id);
 CREATE INDEX idx_bookings_client ON bookings(client_id);
 CREATE INDEX idx_bookings_project ON bookings(project_id);
 CREATE INDEX idx_bookings_status ON bookings(status);
+CREATE INDEX idx_bookings_event_date ON bookings(event_date) WHERE event_date IS NOT NULL;
 CREATE INDEX idx_bookings_updated ON bookings(updated_at DESC);
 
 -- =====================================================
@@ -320,7 +327,9 @@ CREATE TABLE reviews (
   target_role TEXT NOT NULL CHECK (target_role IN ('model', 'client')),
   rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
   comment TEXT,
+  edit_count INTEGER NOT NULL DEFAULT 0 CHECK (edit_count >= 0),
   created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
   
   UNIQUE(booking_id, author_id)
 );
@@ -338,16 +347,20 @@ CREATE TABLE reports (
   reporter_role TEXT NOT NULL,
   reported_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   reported_user_role TEXT NOT NULL,
+  project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
+  booking_id UUID REFERENCES bookings(id) ON DELETE SET NULL,
   reason TEXT NOT NULL CHECK (reason IN (
+    'Non-payment', 'Partial payment only', 'Harassment', 'Agreement violation', 'Unsafe conditions', 'Other',
     'INAPPROPRIATE_BEHAVIOR', 'SCAM', 'FAKE_PROFILE', 'HARASSMENT', 'OTHER'
   )),
   details TEXT,
-  status TEXT DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'REVIEWED', 'RESOLVED')),
+  status TEXT DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'REVIEWED', 'WARNING_SENT', 'ACTION_TAKEN', 'RESOLVED')),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   resolved_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_reports_reported_user ON reports(reported_user_id);
+CREATE INDEX idx_reports_booking ON reports(booking_id) WHERE booking_id IS NOT NULL;
 CREATE INDEX idx_reports_status ON reports(status);
 CREATE INDEX idx_reports_created ON reports(created_at DESC);
 
@@ -519,6 +532,23 @@ CREATE TRIGGER review_inserted_trigger
 AFTER INSERT ON reviews
 FOR EACH ROW EXECUTE FUNCTION update_user_rating();
 
+CREATE OR REPLACE FUNCTION enforce_review_edit_limit()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF OLD.edit_count >= 1 THEN
+    RAISE EXCEPTION 'You have already edited this review once.';
+  END IF;
+
+  NEW.edit_count = OLD.edit_count + 1;
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER enforce_review_edit_limit_trigger
+BEFORE UPDATE ON reviews
+FOR EACH ROW EXECUTE FUNCTION enforce_review_edit_limit();
+
 CREATE TRIGGER review_updated_trigger
 AFTER UPDATE ON reviews
 FOR EACH ROW EXECUTE FUNCTION update_user_rating();
@@ -583,13 +613,141 @@ BEGIN
     AND (p_districts IS NULL OR m.district = ANY(p_districts))
     AND (p_genders IS NULL OR m.gender = ANY(p_genders))
     AND (p_skin_tones IS NULL OR m.skin_tone = ANY(p_skin_tones))
-    AND m.height >= p_min_height
-    AND m.height <= p_max_height
+    AND (p_min_height <= 0 OR m.height >= p_min_height)
+    AND (p_max_height >= 300 OR m.height <= p_max_height)
     AND (NOT p_only_available OR m.availability = TRUE)
   GROUP BY m.id, u.display_name, u.average_rating, u.reviews_count
   ORDER BY m.ranking_score DESC, u.average_rating DESC;
 END;
 $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION search_models_paginated(
+  p_categories TEXT[] DEFAULT NULL,
+  p_districts TEXT[] DEFAULT NULL,
+  p_gender TEXT DEFAULT NULL,
+  p_skin_tones TEXT[] DEFAULT NULL,
+  p_min_height INTEGER DEFAULT 0,
+  p_max_height INTEGER DEFAULT 300,
+  p_min_age INTEGER DEFAULT NULL,
+  p_max_age INTEGER DEFAULT NULL,
+  p_min_rate INTEGER DEFAULT NULL,
+  p_max_rate INTEGER DEFAULT NULL,
+  p_verified_only BOOLEAN DEFAULT FALSE,
+  p_agency_represented BOOLEAN DEFAULT NULL,
+  p_only_available BOOLEAN DEFAULT FALSE,
+  p_offset INTEGER DEFAULT 0,
+  p_limit INTEGER DEFAULT 24
+)
+RETURNS TABLE (
+  id UUID,
+  display_name TEXT,
+  email TEXT,
+  bio TEXT,
+  verified BOOLEAN,
+  is_active BOOLEAN,
+  public_email TEXT,
+  whatsapp TEXT,
+  instagram TEXT,
+  facebook TEXT,
+  website TEXT,
+  average_rating DECIMAL,
+  reviews_count INTEGER,
+  total_projects INTEGER,
+  completed_projects INTEGER,
+  age INTEGER,
+  height INTEGER,
+  gender TEXT,
+  skin_tone TEXT,
+  district TEXT,
+  city TEXT,
+  agency_id UUID,
+  agency_name TEXT,
+  availability BOOLEAN,
+  profile_image_url TEXT,
+  video_reel_url TEXT,
+  views INTEGER,
+  ranking_score DECIMAL,
+  profile_completeness INTEGER,
+  created_at TIMESTAMPTZ,
+  categories TEXT[],
+  pricing JSONB,
+  images TEXT[]
+) AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    m.id,
+    u.display_name,
+    u.email,
+    u.bio,
+    u.verified,
+    u.is_active,
+    u.public_email,
+    u.whatsapp,
+    u.instagram,
+    u.facebook,
+    u.website,
+    u.average_rating,
+    u.reviews_count,
+    u.total_projects,
+    u.completed_projects,
+    m.age,
+    m.height,
+    m.gender,
+    m.skin_tone,
+    m.district,
+    m.city,
+    m.agency_id,
+    m.agency_name,
+    m.availability,
+    m.profile_image_url,
+    m.video_reel_url,
+    m.views,
+    m.ranking_score,
+    COALESCE(m.profile_completeness, 0),
+    m.created_at,
+    COALESCE((
+      SELECT array_agg(DISTINCT mc.category)
+      FROM model_categories mc
+      WHERE mc.model_id = m.id
+    ), ARRAY[]::TEXT[]),
+    COALESCE((
+      SELECT jsonb_object_agg(mp.category, mp.price)
+      FROM model_pricing mp
+      WHERE mp.model_id = m.id
+    ), '{}'::JSONB),
+    COALESCE((
+      SELECT array_agg(mi.cloudinary_url ORDER BY mi.display_order)
+      FROM model_images mi
+      WHERE mi.model_id = m.id
+    ), ARRAY[]::TEXT[])
+  FROM models m
+  JOIN users u ON u.id = m.id
+  WHERE u.is_active = TRUE
+    AND (p_categories IS NULL OR EXISTS (
+      SELECT 1 FROM model_categories mc WHERE mc.model_id = m.id AND mc.category = ANY(p_categories)
+    ))
+    AND (p_districts IS NULL OR m.district = ANY(p_districts))
+    AND (p_gender IS NULL OR m.gender = p_gender)
+    AND (p_skin_tones IS NULL OR m.skin_tone = ANY(p_skin_tones))
+    AND (p_min_height <= 0 OR m.height >= p_min_height)
+    AND (p_max_height >= 300 OR m.height <= p_max_height)
+    AND (p_min_age IS NULL OR m.age >= p_min_age)
+    AND (p_max_age IS NULL OR m.age <= p_max_age)
+    AND (NOT p_verified_only OR u.verified = TRUE)
+    AND (p_agency_represented IS NULL OR (p_agency_represented = TRUE AND m.agency_id IS NOT NULL) OR (p_agency_represented = FALSE AND m.agency_id IS NULL))
+    AND (NOT p_only_available OR m.availability = TRUE)
+    AND (p_min_rate IS NULL OR EXISTS (
+      SELECT 1 FROM model_pricing mp WHERE mp.model_id = m.id AND mp.price >= p_min_rate
+    ))
+    AND (p_max_rate IS NULL OR EXISTS (
+      SELECT 1 FROM model_pricing mp WHERE mp.model_id = m.id AND mp.price <= p_max_rate
+    ))
+  ORDER BY m.ranking_score DESC, u.average_rating DESC, m.created_at DESC
+  OFFSET GREATEST(p_offset, 0)
+  LIMIT GREATEST(p_limit, 1);
+END;
+$$ LANGUAGE plpgsql STABLE;
 
 -- =====================================================
 -- ENABLE RLS ON ALL TABLES
@@ -858,13 +1016,17 @@ WITH CHECK (
   booking_id IN (
     SELECT id FROM bookings 
     WHERE (model_id = auth.uid() OR client_id = auth.uid())
-    AND status = 'completed'
+    AND (
+      status IN ('completed', 'cancelled', 'reported')
+      OR (event_date IS NOT NULL AND event_date <= CURRENT_DATE)
+    )
   )
 );
 
 CREATE POLICY "Users can update own reviews"
 ON reviews FOR UPDATE
-USING (author_id = auth.uid());
+USING (author_id = auth.uid())
+WITH CHECK (author_id = auth.uid());
 
 -- =====================================================
 -- REPORTS POLICIES

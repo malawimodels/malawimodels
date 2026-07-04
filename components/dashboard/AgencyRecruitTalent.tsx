@@ -29,7 +29,7 @@ const AgencyRecruitTalent: React.FC = () => {
             const agencyOwnerIds = agencies.map(a => a.uid);
 
             unsubRecruit = subscribeToSearchModels({
-                categories: [], locations: [], minHeight: 0, maxHeight: 300, gender: null, skinTones: [], onlyAvailable: false
+                categories: [], locations: [], minHeight: 0, maxHeight: 300, gender: null, skinTones: [], onlyAvailable: false, limit: 100
             }, (models) => {
                 if (!active) return;
                 const availableForRecruitment = models.filter(m => 
@@ -85,9 +85,9 @@ const AgencyRecruitTalent: React.FC = () => {
                         Find Talent
                     </h2>
                     <div className="relative w-full md:w-64">
-                        <input 
-                            type="text" 
-                            placeholder="Search independent models..." 
+                        <input
+                            type="text"
+                            placeholder="Search independent talent..."
                             className="w-full bg-brand-bg border border-white/10 rounded-lg py-2 pl-9 pr-4 text-sm text-white focus:border-brand-primary focus:outline-none"
                             value={searchTerm}
                             onChange={e => setSearchTerm(e.target.value)}

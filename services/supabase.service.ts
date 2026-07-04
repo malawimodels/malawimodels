@@ -11,9 +11,10 @@ import {
   ReportReason, NotificationType, ReportStatus,
   AgencyApplication, LeaveRequest, AdminPermission, AvailabilityBlock,
   NotificationPreferences, ContractTemplate, BookingAgreement, Dispute,
-  DisputeEvidence
+  DisputeEvidence, Review, ModelRankingSignal
 } from '../types';
 import { getPublicIdFromUrl } from './cloudinary';
+import { getCachedJson, setCachedJson, stableCacheKey } from '../utils/indexedDbCache';
 
 const isMissingColumnError = (error: any, columnName: string): boolean => {
   const message = `${error?.message || ''} ${error?.details || ''}`.toLowerCase();
@@ -40,9 +41,55 @@ const hasOptionalRelation = async (_relationName: string): Promise<boolean> => o
 
 const hasOptionalRpc = async (_functionName: string): Promise<boolean> => optionalHardeningSchemaEnabled;
 
+type DebounceTimer = ReturnType<typeof setTimeout> | null;
+
+const DEFAULT_SEARCH_MAX_HEIGHT = 300;
+const REVIEWABLE_BOOKING_STATUSES = new Set<BookingStatus | string>(['completed', 'cancelled', 'reported']);
+
+export interface SearchModelsMeta {
+  hasMore: boolean;
+  page: number;
+  limit: number;
+}
+
+type SearchModelsCacheEntry = {
+  models: ModelProfile[];
+  meta: SearchModelsMeta;
+};
+
+const SEARCH_CACHE_TTL_MS = 90 * 1000;
+
+const isPastOrToday = (date?: string | null): boolean => {
+  if (!date) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(date);
+  target.setHours(0, 0, 0, 0);
+  return !Number.isNaN(target.getTime()) && target.getTime() <= today.getTime();
+};
+
+export const isBookingReviewable = (booking: Pick<Booking, 'status' | 'eventDate'>): boolean => {
+  return REVIEWABLE_BOOKING_STATUSES.has(booking.status) || isPastOrToday(booking.eventDate);
+};
+
 const getCurrentAuthUserId = async (): Promise<string | null> => {
   const { data: { user } } = await supabase.auth.getUser();
   return user?.id || null;
+};
+
+const ensureModelProfileRow = async (uid: string): Promise<void> => {
+  const { error } = await supabase.from('models').upsert(
+    {
+      id: uid,
+      district: 'Not Specified',
+      views: 0,
+      ranking_score: 0,
+      availability: true,
+    },
+    { onConflict: 'id' }
+  );
+
+  if (error) throw error;
 };
 
 const retryWithoutMissingColumn = async <T extends Record<string, any>>(
@@ -230,18 +277,9 @@ export const createUserProfile = async (
 
   // If model, create model profile (with default district)
   if (role === UserRole.MODEL) {
-    const { error: modelError } = await supabase.from('models').upsert(
-      {
-        id: uid,
-        district: 'Not Specified',
-        views: 0,
-        ranking_score: 0,
-        availability: true,
-      },
-      { onConflict: 'id' }
-    );
-
-    if (modelError) {
+    try {
+      await ensureModelProfileRow(uid);
+    } catch (modelError) {
       console.error('Error creating model profile:', modelError);
       // Don't throw - allow user creation to succeed even if model profile fails
     }
@@ -511,11 +549,11 @@ const attachUsersToModels = async (models: any[]): Promise<any[]> => {
 
   if (error) {
     console.error('Error fetching users for models:', error);
-    return models;
+    return models.map((model) => ({ ...model, users: null, userLookupFailed: true }));
   }
 
   const usersById = new Map((users || []).map((u: any) => [u.id, u]));
-  return models.map((m) => ({ ...m, users: usersById.get(m.id) || null }));
+  return models.map((m) => ({ ...m, users: usersById.get(m.id) || null, userLookupFailed: false }));
 };
 
 export const getModelProfile = async (
@@ -539,7 +577,36 @@ export const getModelProfile = async (
     return null;
   }
 
-  if (!data) return null;
+  if (!data) {
+    const currentUserId = await getCurrentAuthUserId();
+    if (currentUserId !== uid) return null;
+
+    try {
+      await ensureModelProfileRow(uid);
+    } catch (ensureError) {
+      console.error('Error ensuring model profile:', ensureError);
+      return null;
+    }
+
+    const { data: recoveredData, error: recoveredError } = await supabase
+      .from('models')
+      .select(`
+        *,
+        model_categories (category),
+        model_pricing (category, price),
+        model_images (cloudinary_url, display_order)
+      `)
+      .eq('id', uid)
+      .maybeSingle();
+
+    if (recoveredError || !recoveredData) {
+      if (recoveredError) console.error('Error fetching recovered model:', recoveredError);
+      return null;
+    }
+
+    const [withRecoveredUser] = await attachUsersToModels([recoveredData]);
+    return transformModelData(withRecoveredUser);
+  }
 
   const [withUser] = await attachUsersToModels([data]);
   return transformModelData(withUser);
@@ -621,127 +688,253 @@ export const clearSavedModels = async (userId: string): Promise<void> => {
   if (error) throw error;
 };
 
+const normalizeRpcModelRow = (row: any): any => ({
+  id: row.id,
+  age: row.age,
+  height: row.height,
+  gender: row.gender,
+  skin_tone: row.skin_tone,
+  district: row.district,
+  city: row.city,
+  agency_id: row.agency_id,
+  agency_name: row.agency_name,
+  availability: row.availability,
+  profile_image_url: row.profile_image_url || row.photo_url,
+  video_reel_url: row.video_reel_url,
+  views: row.views,
+  ranking_score: row.ranking_score,
+  profile_completeness: row.profile_completeness,
+  created_at: row.created_at,
+  users: {
+    id: row.id,
+    display_name: row.display_name,
+    email: row.email,
+    bio: row.bio,
+    verified: row.verified,
+    is_active: row.is_active,
+    average_rating: row.average_rating,
+    reviews_count: row.reviews_count,
+    total_projects: row.total_projects,
+    completed_projects: row.completed_projects,
+    public_email: row.public_email,
+    whatsapp: row.whatsapp,
+    instagram: row.instagram,
+    facebook: row.facebook,
+    website: row.website,
+  },
+  model_categories: (row.categories || []).map((category: string) => ({ category })),
+  model_pricing: Object.entries(row.pricing || {}).map(([category, price]) => ({ category, price })),
+  model_images: (row.images || []).map((cloudinary_url: string, display_order: number) => ({
+    cloudinary_url,
+    display_order,
+  })),
+});
+
+const fetchSearchModelsViaRpc = async (filters: SearchFilters, limit: number, page: number): Promise<any[] | null> => {
+  const { data, error } = await supabase.rpc('search_models_paginated', {
+    p_categories: filters.categories?.length ? filters.categories : null,
+    p_districts: filters.locations?.length ? filters.locations : null,
+    p_gender: filters.gender || null,
+    p_skin_tones: filters.skinTones?.length ? filters.skinTones : null,
+    p_min_height: filters.minHeight ?? 0,
+    p_max_height: filters.maxHeight ?? DEFAULT_SEARCH_MAX_HEIGHT,
+    p_min_age: filters.minAge || null,
+    p_max_age: filters.maxAge || null,
+    p_min_rate: filters.minRate || null,
+    p_max_rate: filters.maxRate || null,
+    p_verified_only: filters.verifiedOnly || false,
+    p_agency_represented: filters.agencyRepresented ?? null,
+    p_only_available: filters.onlyAvailable || false,
+    p_offset: page * limit,
+    p_limit: limit + 1,
+  });
+
+  if (error) {
+    if (isMissingRelationError(error, 'search_models_paginated') || `${error.message || ''}`.includes('function')) {
+      return null;
+    }
+    throw error;
+  }
+
+  return (data || []).map(normalizeRpcModelRow);
+};
+
+const fetchSearchModelsDirect = async (filters: SearchFilters, limit: number, page: number): Promise<any[]> => {
+  let query = supabase
+    .from('models')
+    .select(`
+      *,
+      model_categories (category),
+      model_pricing (category, price),
+      model_images (cloudinary_url, display_order)
+    `);
+
+  if (filters.categories && filters.categories.length > 0) {
+    query = query.filter('model_categories.category', 'in', `(${filters.categories.join(',')})`);
+  }
+
+  if (filters.locations && filters.locations.length > 0) {
+    query = query.in('district', filters.locations);
+  }
+
+  if (filters.gender) {
+    query = query.eq('gender', filters.gender);
+  }
+
+  if (filters.skinTones && filters.skinTones.length > 0) {
+    query = query.in('skin_tone', filters.skinTones);
+  }
+
+  if (typeof filters.minHeight === 'number' && filters.minHeight > 0) {
+    query = query.gte('height', filters.minHeight);
+  }
+
+  if (
+    typeof filters.maxHeight === 'number' &&
+    filters.maxHeight > 0 &&
+    filters.maxHeight < DEFAULT_SEARCH_MAX_HEIGHT
+  ) {
+    query = query.lte('height', filters.maxHeight);
+  }
+
+  if (filters.minAge) {
+    query = query.gte('age', filters.minAge);
+  }
+
+  if (filters.maxAge) {
+    query = query.lte('age', filters.maxAge);
+  }
+
+  if (filters.agencyRepresented === true) {
+    query = query.not('agency_id', 'is', null);
+  } else if (filters.agencyRepresented === false) {
+    query = query.is('agency_id', null);
+  }
+
+  if (filters.onlyAvailable) {
+    query = query.eq('availability', true);
+  }
+
+  query = query.order('ranking_score', { ascending: false });
+  query = query.range(page * limit, page * limit + limit);
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const withUsers = await attachUsersToModels(data || []);
+  let activeModels = withUsers.filter(
+    (m) => m.userLookupFailed || !m.users || m.users.is_active !== false
+  );
+
+  if (filters.verifiedOnly) {
+    activeModels = activeModels.filter((m) => m.users?.verified === true);
+  }
+
+  if (filters.minRate || filters.maxRate) {
+    activeModels = activeModels.filter((m) => {
+      const prices = (m.model_pricing || []).map((price: any) => Number(price.price || 0));
+      if (prices.length === 0) return false;
+      const minPrice = Math.min(...prices);
+      const maxPrice = Math.max(...prices);
+      if (filters.minRate && maxPrice < filters.minRate) return false;
+      if (filters.maxRate && minPrice > filters.maxRate) return false;
+      return true;
+    });
+  }
+
+  return activeModels;
+};
+
+export const getSearchModelsPage = async (filters: SearchFilters): Promise<{
+  models: ModelProfile[];
+  meta: SearchModelsMeta;
+}> => {
+  const cacheKey = getSearchModelsCacheKey(filters);
+  const limit = filters.limit || 48;
+  const page = filters.page || 0;
+  let activeModels = await fetchSearchModelsViaRpc(filters, limit, page);
+
+  if (!activeModels) {
+    activeModels = await fetchSearchModelsDirect(filters, limit, page);
+  }
+
+  if (filters.availabilityDate && activeModels.length > 0 && await hasOptionalRelation('model_availability_blocks')) {
+    const modelIds = activeModels.map((m) => m.id);
+    const { data: blocks, error: blockError } = await supabase
+      .from('model_availability_blocks')
+      .select('model_id')
+      .in('model_id', modelIds)
+      .lte('start_date', filters.availabilityDate)
+      .gte('end_date', filters.availabilityDate);
+
+    if (!blockError) {
+      const unavailable = new Set((blocks || []).map((block: any) => block.model_id));
+      activeModels = activeModels.filter((m) => !unavailable.has(m.id));
+    }
+  }
+
+  const hasMore = activeModels.length > limit;
+  const result = {
+    models: activeModels.slice(0, limit).map(transformModelData),
+    meta: { hasMore, page, limit },
+  };
+
+  setCachedJson(cacheKey, result, SEARCH_CACHE_TTL_MS).catch(() => {});
+  return result;
+};
+
+const getSearchModelsCacheKey = (filters: SearchFilters): string => stableCacheKey('search-models', {
+  categories: filters.categories || [],
+  locations: filters.locations || [],
+  minHeight: filters.minHeight || 0,
+  maxHeight: filters.maxHeight || DEFAULT_SEARCH_MAX_HEIGHT,
+  minAge: filters.minAge || null,
+  maxAge: filters.maxAge || null,
+  minRate: filters.minRate || null,
+  maxRate: filters.maxRate || null,
+  availabilityDate: filters.availabilityDate || null,
+  verifiedOnly: filters.verifiedOnly || false,
+  agencyRepresented: filters.agencyRepresented ?? null,
+  page: filters.page || 0,
+  limit: filters.limit || 48,
+  gender: filters.gender || null,
+  skinTones: filters.skinTones || [],
+  onlyAvailable: filters.onlyAvailable || false,
+});
+
 export const subscribeToSearchModels = (
   filters: SearchFilters,
-  callback: (models: ModelProfile[]) => void
+  callback: (models: ModelProfile[], meta?: SearchModelsMeta) => void
 ): (() => void) => {
   let active = true;
 
-  const fetchModels = async () => {
+  const fetchModels = async (preferCache = false) => {
     try {
-      let query = supabase
-        .from('models')
-        .select(`
-          *,
-          model_categories (category),
-          model_pricing (category, price),
-          model_images (cloudinary_url, display_order)
-        `);
+      const cacheKey = getSearchModelsCacheKey(filters);
 
-      // Apply filters
-      if (filters.categories && filters.categories.length > 0) {
-        // Note: This requires model_categories to have at least one matching category
-        query = query.filter('model_categories.category', 'in', `(${filters.categories.join(',')})`);
-      }
-
-      if (filters.locations && filters.locations.length > 0) {
-        query = query.in('district', filters.locations);
-      }
-
-      if (filters.gender) {
-        query = query.eq('gender', filters.gender);
-      }
-
-      if (filters.skinTones && filters.skinTones.length > 0) {
-        query = query.in('skin_tone', filters.skinTones);
-      }
-
-      if (filters.minHeight) {
-        query = query.gte('height', filters.minHeight);
-      }
-
-      if (filters.maxHeight) {
-        query = query.lte('height', filters.maxHeight);
-      }
-
-      if (filters.minAge) {
-        query = query.gte('age', filters.minAge);
-      }
-
-      if (filters.maxAge) {
-        query = query.lte('age', filters.maxAge);
-      }
-
-      if (filters.agencyRepresented === true) {
-        query = query.not('agency_id', 'is', null);
-      } else if (filters.agencyRepresented === false) {
-        query = query.is('agency_id', null);
-      }
-
-      if (filters.onlyAvailable) {
-        query = query.eq('availability', true);
-      }
-
-      // Order by ranking score
-      query = query.order('ranking_score', { ascending: false });
-      query = query.range(
-        ((filters.page || 0) * (filters.limit || 48)),
-        ((filters.page || 0) * (filters.limit || 48)) + (filters.limit || 48) - 1
-      );
-
-      const { data, error } = await query;
-
-      if (error) throw error;
-
-      const withUsers = await attachUsersToModels(data || []);
-      let activeModels = withUsers.filter(
-        (m) => m.users && m.users.is_active !== false
-      );
-
-      if (filters.verifiedOnly) {
-        activeModels = activeModels.filter((m) => m.users?.verified === true);
-      }
-
-      if (filters.minRate || filters.maxRate) {
-        activeModels = activeModels.filter((m) => {
-          const prices = (m.model_pricing || []).map((price: any) => Number(price.price || 0));
-          if (prices.length === 0) return false;
-          const minPrice = Math.min(...prices);
-          const maxPrice = Math.max(...prices);
-          if (filters.minRate && maxPrice < filters.minRate) return false;
-          if (filters.maxRate && minPrice > filters.maxRate) return false;
-          return true;
-        });
-      }
-
-      if (filters.availabilityDate && activeModels.length > 0 && await hasOptionalRelation('model_availability_blocks')) {
-        const modelIds = activeModels.map((m) => m.id);
-        const { data: blocks, error: blockError } = await supabase
-          .from('model_availability_blocks')
-          .select('model_id')
-          .in('model_id', modelIds)
-          .lte('start_date', filters.availabilityDate)
-          .gte('end_date', filters.availabilityDate);
-
-        if (!blockError) {
-          const unavailable = new Set((blocks || []).map((block: any) => block.model_id));
-          activeModels = activeModels.filter((m) => !unavailable.has(m.id));
+      if (preferCache) {
+        const cached = await getCachedJson<SearchModelsCacheEntry>(cacheKey, SEARCH_CACHE_TTL_MS);
+        if (cached && active) {
+          callback(cached.value.models, cached.value.meta);
+          if (cached.isFresh) return;
         }
       }
 
+      const { models, meta } = await getSearchModelsPage(filters);
       if (active) {
-        callback(activeModels.map(transformModelData));
+        callback(models, meta);
       }
     } catch (error) {
       console.error('Error searching models:', error);
-      if (active) callback([]);
+      if (active) callback([], { hasMore: false, page: filters.page || 0, limit: filters.limit || 48 });
     }
   };
 
   // Initial fetch
-  fetchModels();
+  fetchModels(true);
 
-  // Subscribe to changes
+  // Subscribe to profile-related changes so newly completed talent profiles
+  // appear without requiring a manual page refresh.
   const channelName = `models_search_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const subscription = supabase
     .channel(channelName)
@@ -751,6 +944,39 @@ export const subscribeToSearchModels = (
         event: '*',
         schema: 'public',
         table: 'models',
+      },
+      () => {
+        fetchModels();
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'users',
+      },
+      () => {
+        fetchModels();
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'model_categories',
+      },
+      () => {
+        fetchModels();
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'model_images',
       },
       () => {
         fetchModels();
@@ -958,6 +1184,10 @@ export const updateModelProfile = async (
       if (error) throw error;
     }
   }
+
+  refreshModelRankingScore(uid).catch((error) => {
+    console.warn('Could not refresh ranking after profile update:', error);
+  });
 };
 
 export const incrementModelViews = async (uid: string): Promise<void> => {
@@ -1345,7 +1575,8 @@ export const subscribeToClientProjects = (
   callback: (projects: Project[]) => void
 ): (() => void) => {
   let active = true;
-  let debounceTimer: NodeJS.Timeout | null = null;
+  let debounceTimer: DebounceTimer = null;
+  let projectIds = new Set<string>();
 
   const fetchProjects = async () => {
     // Clear any pending debounced fetch
@@ -1367,7 +1598,9 @@ export const subscribeToClientProjects = (
     }
 
     if (active) {
-      callback((await attachProjectRelations(data || [])).map(transformProject));
+      const projects = data || [];
+      projectIds = new Set(projects.map((project: any) => project.id).filter(Boolean));
+      callback((await attachProjectRelations(projects)).map(transformProject));
     }
   };
 
@@ -1404,9 +1637,11 @@ export const subscribeToClientProjects = (
         schema: 'public',
         table: 'project_applications',
       },
-      () => {
-        // When someone applies, update client's projects in real-time
-        debouncedFetch();
+      (payload) => {
+        const changedProjectId = (payload.new as any)?.project_id || (payload.old as any)?.project_id;
+        if (changedProjectId && projectIds.has(changedProjectId)) {
+          debouncedFetch();
+        }
       }
     )
     .on(
@@ -1416,9 +1651,11 @@ export const subscribeToClientProjects = (
         schema: 'public',
         table: 'project_invitations',
       },
-      () => {
-        // When invitations change, update client's projects
-        debouncedFetch();
+      (payload) => {
+        const changedProjectId = (payload.new as any)?.project_id || (payload.old as any)?.project_id;
+        if (changedProjectId && projectIds.has(changedProjectId)) {
+          debouncedFetch();
+        }
       }
     )
     .subscribe();
@@ -1437,7 +1674,8 @@ export const subscribeToOpenProjectsByCategories = (
   callback: (projects: Project[]) => void
 ): (() => void) => {
   let active = true;
-  let debounceTimer: NodeJS.Timeout | null = null;
+  let debounceTimer: DebounceTimer = null;
+  let projectIds = new Set<string>();
 
   const fetchProjects = async () => {
     // Clear any pending debounced fetch
@@ -1466,7 +1704,9 @@ export const subscribeToOpenProjectsByCategories = (
     }
 
     if (active) {
-      callback((await attachProjectRelations(data || [])).map(transformProject));
+      const projects = data || [];
+      projectIds = new Set(projects.map((project: any) => project.id).filter(Boolean));
+      callback((await attachProjectRelations(projects)).map(transformProject));
     }
   };
 
@@ -1504,9 +1744,11 @@ export const subscribeToOpenProjectsByCategories = (
         schema: 'public',
         table: 'project_applications',
       },
-      () => {
-        // When someone applies/cancels, update the UI in real-time
-        debouncedFetch();
+      (payload) => {
+        const changedProjectId = (payload.new as any)?.project_id || (payload.old as any)?.project_id;
+        if (changedProjectId && projectIds.has(changedProjectId)) {
+          debouncedFetch();
+        }
       }
     )
     .on(
@@ -1516,9 +1758,11 @@ export const subscribeToOpenProjectsByCategories = (
         schema: 'public',
         table: 'project_invitations',
       },
-      () => {
-        // When invitations change, update the UI
-        debouncedFetch();
+      (payload) => {
+        const changedProjectId = (payload.new as any)?.project_id || (payload.old as any)?.project_id;
+        if (changedProjectId && projectIds.has(changedProjectId)) {
+          debouncedFetch();
+        }
       }
     )
     .subscribe();
@@ -1668,11 +1912,13 @@ export const approveModelApplication = async (
   offerPrice = 0
 ): Promise<void> => {
   // Update application status
-  await supabase
+  const { error: applicationError } = await supabase
     .from('project_applications')
     .update({ status: 'approved' })
     .eq('project_id', projectId)
     .eq('model_id', modelId);
+
+  if (applicationError) throw applicationError;
 
   // Get details for booking creation
   const { data: project, error: projectError } = await supabase
@@ -1697,9 +1943,10 @@ export const approveModelApplication = async (
       .single();
 
     // Create booking
-    const { data: booking, error: bookingError } = await supabase.from('bookings').upsert({
+    const bookingPayload = {
       project_id: projectId,
       project_title: project.title,
+      event_date: project.event_date || null,
       model_id: modelId,
       model_name: model.display_name,
       client_id: project.owner_id,
@@ -1708,7 +1955,24 @@ export const approveModelApplication = async (
       current_offer_amount: offerPrice || 0,
       current_offer_by: 'client',
       current_offer_at: new Date().toISOString(),
-    }, { onConflict: 'project_id,model_id' }).select('id').single();
+    };
+
+    let { data: booking, error: bookingError } = await supabase
+      .from('bookings')
+      .upsert(bookingPayload, { onConflict: 'project_id,model_id' })
+      .select('id')
+      .single();
+
+    if (bookingError && isMissingColumnError(bookingError, 'event_date')) {
+      const { event_date, ...legacyBookingPayload } = bookingPayload;
+      const retry = await supabase
+        .from('bookings')
+        .upsert(legacyBookingPayload, { onConflict: 'project_id,model_id' })
+        .select('id')
+        .single();
+      booking = retry.data;
+      bookingError = retry.error;
+    }
 
     if (bookingError) throw bookingError;
 
@@ -1777,7 +2041,8 @@ export const subscribeToBookings = (
   callback: (bookings: Booking[]) => void
 ): (() => void) => {
   let active = true;
-  let debounceTimer: NodeJS.Timeout | null = null;
+  let debounceTimer: DebounceTimer = null;
+  let bookingIds = new Set<string>();
 
   const fetchBookings = async () => {
     // Clear any pending debounced fetch
@@ -1819,9 +2084,10 @@ export const subscribeToBookings = (
       .eq('user_id', userId);
 
     const hiddenIds = hidden?.map((h) => h.booking_id) || [];
-    const visibleBookings = data.filter((b) => !hiddenIds.includes(b.id));
+    const visibleBookings = (data || []).filter((b) => !hiddenIds.includes(b.id));
 
     if (active) {
+      bookingIds = new Set(visibleBookings.map((booking: any) => booking.id).filter(Boolean));
       callback(visibleBookings.map(transformBooking));
     }
   };
@@ -1838,15 +2104,23 @@ export const subscribeToBookings = (
 
   fetchBookings();
 
+  const bookingChangeConfig: any = {
+    event: '*',
+    schema: 'public',
+    table: 'bookings',
+  };
+
+  if (role === UserRole.MODEL) {
+    bookingChangeConfig.filter = `model_id=eq.${userId}`;
+  } else if (role === UserRole.CLIENT) {
+    bookingChangeConfig.filter = `client_id=eq.${userId}`;
+  }
+
   const subscription = supabase
     .channel(`bookings_realtime:${userId}`)
     .on(
       'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'bookings',
-      },
+      bookingChangeConfig,
       () => {
         debouncedFetch();
       }
@@ -1858,9 +2132,37 @@ export const subscribeToBookings = (
         schema: 'public',
         table: 'booking_negotiations',
       },
+      (payload) => {
+        const changedBookingId = (payload.new as any)?.booking_id || (payload.old as any)?.booking_id;
+        if (changedBookingId && bookingIds.has(changedBookingId)) {
+          debouncedFetch();
+        }
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'booking_hidden_by',
+        filter: `user_id=eq.${userId}`,
+      },
       () => {
-        // When negotiations change, update bookings in real-time
         debouncedFetch();
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'reviews',
+      },
+      (payload) => {
+        const changedBookingId = (payload.new as any)?.booking_id || (payload.old as any)?.booking_id;
+        if (changedBookingId && bookingIds.has(changedBookingId)) {
+          debouncedFetch();
+        }
       }
     )
     .subscribe();
@@ -1953,13 +2255,15 @@ export const uploadPaymentProof = async (
   bookingId: string,
   proofUrl: string
 ): Promise<void> => {
-  await supabase
+  const { error } = await supabase
     .from('bookings')
     .update({
       payment_proof_url: proofUrl,
       status: 'scheduled',
     })
     .eq('id', bookingId);
+
+  if (error) throw error;
 
   // Notify model
   const { data: booking } = await supabase
@@ -1980,10 +2284,22 @@ export const uploadPaymentProof = async (
 };
 
 export const completeBooking = async (bookingId: string): Promise<void> => {
-  await supabase
+  const { error } = await supabase
     .from('bookings')
     .update({ status: 'completed' })
     .eq('id', bookingId);
+
+  if (error) throw error;
+
+  const { data: booking } = await supabase
+    .from('bookings')
+    .select('model_id')
+    .eq('id', bookingId)
+    .maybeSingle();
+
+  if (booking?.model_id) {
+    await refreshModelRankingScore(booking.model_id);
+  }
 };
 
 export const cancelBookingWithReason = async (
@@ -1991,12 +2307,41 @@ export const cancelBookingWithReason = async (
   reason: string,
   _cancelledBy?: string
 ): Promise<void> => {
-  await supabase
-    .from('bookings')
-    .update({
-      status: 'cancelled',
-    })
-    .eq('id', bookingId);
+  const updates = {
+    status: 'cancelled',
+    cancellation_reason: reason || null,
+    cancelled_by: _cancelledBy || null,
+  };
+
+  let safeUpdates: any = { ...updates };
+  let cancellationUpdated = false;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const { error } = await supabase
+      .from('bookings')
+      .update(safeUpdates)
+      .eq('id', bookingId);
+
+    if (!error) {
+      cancellationUpdated = true;
+      break;
+    }
+
+    if (isMissingColumnError(error, 'cancellation_reason')) {
+      delete safeUpdates.cancellation_reason;
+      continue;
+    }
+
+    if (isMissingColumnError(error, 'cancelled_by')) {
+      delete safeUpdates.cancelled_by;
+      continue;
+    }
+
+    throw error;
+  }
+
+  if (!cancellationUpdated) {
+    throw new Error('Booking cancellation could not be saved.');
+  }
 
   // Notify both parties
   const { data: booking } = await supabase
@@ -2043,6 +2388,307 @@ export const archiveBooking = async (
 // REVIEW & REPORT MANAGEMENT
 // =====================================================
 
+export type ReviewListMode = 'received' | 'authored';
+
+const attachReviewRelations = async (reviews: any[]): Promise<any[]> => {
+  if (!reviews || reviews.length === 0) return reviews || [];
+
+  const userIds = Array.from(new Set(
+    reviews.flatMap((review: any) => [review.author_id, review.target_id]).filter(Boolean)
+  ));
+  const bookingIds = Array.from(new Set(reviews.map((review: any) => review.booking_id).filter(Boolean)));
+
+  const [{ data: users, error: usersError }, { data: bookings, error: bookingsError }] = await Promise.all([
+    userIds.length > 0
+      ? supabase.from('users').select('id, display_name, role').in('id', userIds)
+      : Promise.resolve({ data: [], error: null } as any),
+    bookingIds.length > 0
+      ? supabase.from('bookings').select('id, project_title, status').in('id', bookingIds)
+      : Promise.resolve({ data: [], error: null } as any),
+  ]);
+
+  if (usersError) console.warn('Error fetching review users:', usersError);
+  if (bookingsError) console.warn('Error fetching review bookings:', bookingsError);
+
+  const usersById = new Map((users || []).map((user: any) => [user.id, user]));
+  const bookingsById = new Map((bookings || []).map((booking: any) => [booking.id, booking]));
+
+  return reviews.map((review: any) => ({
+    ...review,
+    _author: usersById.get(review.author_id) || null,
+    _target: usersById.get(review.target_id) || null,
+    _booking: bookingsById.get(review.booking_id) || null,
+  }));
+};
+
+const transformReviewData = (data: any, viewerId?: string): Review => {
+  const editCount = Number(data.edit_count || 0);
+
+  return {
+    id: data.id,
+    authorId: data.author_id,
+    authorName: data._author?.display_name || 'User',
+    authorRole: data._author?.role,
+    targetId: data.target_id,
+    targetName: data._target?.display_name || 'User',
+    targetRole: data.target_role || data._target?.role,
+    bookingId: data.booking_id,
+    projectTitle: data._booking?.project_title,
+    bookingStatus: data._booking?.status,
+    rating: Number(data.rating || 0),
+    comment: data.comment || '',
+    editCount,
+    canEdit: viewerId === data.author_id && editCount < 1,
+    createdAt: data.created_at,
+    updatedAt: data.updated_at || data.created_at,
+  };
+};
+
+export const getReviewsForUser = async (
+  userId: string,
+  mode: ReviewListMode = 'received',
+  viewerId?: string,
+  limit = 100
+): Promise<Review[]> => {
+  if (!userId) return [];
+
+  const column = mode === 'authored' ? 'author_id' : 'target_id';
+  const { data, error } = await supabase
+    .from('reviews')
+    .select('*')
+    .eq(column, userId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error('Error fetching reviews:', error);
+    return [];
+  }
+
+  return (await attachReviewRelations(data || [])).map((review) => transformReviewData(review, viewerId));
+};
+
+export const subscribeToUserReviews = (
+  userId: string,
+  mode: ReviewListMode,
+  callback: (reviews: Review[]) => void,
+  viewerId?: string,
+  limit = 100
+): (() => void) => {
+  let active = true;
+  let debounceTimer: DebounceTimer = null;
+  const column = mode === 'authored' ? 'author_id' : 'target_id';
+
+  const fetchReviews = async () => {
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
+
+    const reviews = await getReviewsForUser(userId, mode, viewerId, limit);
+    if (active) callback(reviews);
+  };
+
+  const debouncedFetch = () => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(fetchReviews, 250);
+  };
+
+  fetchReviews();
+
+  const subscription = supabase
+    .channel(`reviews:${mode}:${userId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'reviews',
+        filter: `${column}=eq.${userId}`,
+      },
+      () => {
+        debouncedFetch();
+      }
+    )
+    .subscribe();
+
+  return () => {
+    active = false;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    subscription.unsubscribe();
+  };
+};
+
+const getBookingForReview = async (bookingId: string): Promise<any | null> => {
+  let { data, error } = await supabase
+    .from('bookings')
+    .select('id, status, model_id, client_id, event_date, model_review_id, client_review_id')
+    .eq('id', bookingId)
+    .maybeSingle();
+
+  if (error && isMissingColumnError(error, 'event_date')) {
+    const retry = await supabase
+      .from('bookings')
+      .select('id, status, model_id, client_id, model_review_id, client_review_id')
+      .eq('id', bookingId)
+      .maybeSingle();
+    data = retry.data;
+    error = retry.error;
+  }
+
+  if (error) throw error;
+  return data;
+};
+
+const getExistingReviewForAuthor = async (bookingId: string, authorId: string): Promise<any | null> => {
+  let { data, error } = await supabase
+    .from('reviews')
+    .select('id, edit_count')
+    .eq('booking_id', bookingId)
+    .eq('author_id', authorId)
+    .maybeSingle();
+
+  if (error && isMissingColumnError(error, 'edit_count')) {
+    const retry = await supabase
+      .from('reviews')
+      .select('id')
+      .eq('booking_id', bookingId)
+      .eq('author_id', authorId)
+      .maybeSingle();
+    data = retry.data;
+    error = retry.error;
+  }
+
+  if (error) throw error;
+  return data;
+};
+
+const saveReviewRow = async (review: {
+  bookingId: string;
+  authorId: string;
+  targetId: string;
+  targetRole: UserRole;
+  rating: number;
+  comment?: string;
+}, existingReview?: any | null): Promise<string> => {
+  const now = new Date().toISOString();
+  const comment = review.comment?.trim() || null;
+
+  if (existingReview) {
+    const editCount = Number(existingReview.edit_count || 0);
+    if (editCount >= 1) {
+      throw new Error('You have already edited this review once.');
+    }
+
+    const updatePayload = {
+      rating: review.rating,
+      comment,
+      edit_count: editCount + 1,
+      updated_at: now,
+    };
+
+    let { data, error } = await supabase
+      .from('reviews')
+      .update(updatePayload)
+      .eq('id', existingReview.id)
+      .select('id')
+      .single();
+
+    if (error && (isMissingColumnError(error, 'edit_count') || isMissingColumnError(error, 'updated_at'))) {
+      const retry = await supabase
+        .from('reviews')
+        .update({ rating: review.rating, comment })
+        .eq('id', existingReview.id)
+        .select('id')
+        .single();
+      data = retry.data;
+      error = retry.error;
+    }
+
+    if (error) throw error;
+    return data.id;
+  }
+
+  const insertPayload = {
+    booking_id: review.bookingId,
+    author_id: review.authorId,
+    target_id: review.targetId,
+    target_role: review.targetRole,
+    rating: review.rating,
+    comment,
+    edit_count: 0,
+    updated_at: now,
+  };
+
+  let { data, error } = await supabase
+    .from('reviews')
+    .insert(insertPayload)
+    .select('id')
+    .single();
+
+  if (error && (isMissingColumnError(error, 'edit_count') || isMissingColumnError(error, 'updated_at'))) {
+    const { edit_count, updated_at, ...legacyPayload } = insertPayload;
+    const retry = await supabase
+      .from('reviews')
+      .insert(legacyPayload)
+      .select('id')
+      .single();
+    data = retry.data;
+    error = retry.error;
+  }
+
+  if (error) throw error;
+  return data.id;
+};
+
+export const refreshModelRankingScore = async (modelId: string): Promise<void> => {
+  if (!modelId) return;
+
+  try {
+    const [{ data: model }, { data: user }, { count: completedBookings }] = await Promise.all([
+      supabase
+        .from('models')
+        .select('availability, views, profile_completeness')
+        .eq('id', modelId)
+        .maybeSingle(),
+      supabase
+        .from('users')
+        .select('average_rating, reviews_count, completed_projects')
+        .eq('id', modelId)
+        .maybeSingle(),
+      supabase
+        .from('bookings')
+        .select('id', { count: 'exact', head: true })
+        .eq('model_id', modelId)
+        .eq('status', 'completed'),
+    ]);
+
+    if (!model && !user) return;
+
+    const ratingScore = Number(user?.average_rating || 0) * 20;
+    const reviewScore = Math.min(Number(user?.reviews_count || 0), 25) * 2;
+    const completedScore = Math.min(completedBookings ?? Number(user?.completed_projects || 0), 25) * 2;
+    const completenessScore = Math.min(Number(model?.profile_completeness || 0), 100) * 0.25;
+    const availabilityScore = model?.availability ? 10 : 0;
+    const viewScore = Math.min(Number(model?.views || 0) / 10, 10);
+
+    const rankingScore = Number(
+      (ratingScore + reviewScore + completedScore + completenessScore + availabilityScore + viewScore).toFixed(2)
+    );
+
+    const { error } = await supabase
+      .from('models')
+      .update({ ranking_score: rankingScore })
+      .eq('id', modelId);
+
+    if (error) {
+      console.warn('Could not update model ranking score:', error.message);
+    }
+  } catch (error) {
+    console.warn('Could not refresh model ranking score:', error);
+  }
+};
+
 export const submitReview = async (reviewOrBookingId: {
   bookingId: string;
   authorId: string;
@@ -2066,35 +2712,97 @@ export const submitReview = async (reviewOrBookingId: {
     throw new Error('Missing review details');
   }
 
-  const { data, error } = await supabase
-    .from('reviews')
-    .upsert({
-      booking_id: review.bookingId,
-      author_id: review.authorId,
-      target_id: review.targetId,
-      target_role: review.targetRole,
-      rating: review.rating,
-      comment: review.comment,
-    }, { onConflict: 'booking_id,author_id' })
-    .select('id')
-    .single();
+  if (review.rating < 1 || review.rating > 5) {
+    throw new Error('Rating must be between 1 and 5.');
+  }
 
-  if (error) throw error;
+  const booking = await getBookingForReview(review.bookingId);
+  if (!booking) throw new Error('Booking not found.');
+
+  const authorIsClient = booking.client_id === review.authorId;
+  const authorIsModel = booking.model_id === review.authorId;
+  if (!authorIsClient && !authorIsModel) {
+    throw new Error('You can only review bookings you participated in.');
+  }
+
+  const expectedTargetId = authorIsClient ? booking.model_id : booking.client_id;
+  const expectedTargetRole = authorIsClient ? UserRole.MODEL : UserRole.CLIENT;
+  if (review.targetId !== expectedTargetId || review.targetRole !== expectedTargetRole) {
+    throw new Error('Review target does not match this booking.');
+  }
+
+  if (!REVIEWABLE_BOOKING_STATUSES.has(booking.status) && !isPastOrToday(booking.event_date)) {
+    throw new Error('Reviews unlock after the booking is completed, cancelled, reported, or the job date has passed.');
+  }
+
+  const existingReview = await getExistingReviewForAuthor(review.bookingId, review.authorId);
+  const reviewId = await saveReviewRow(review as {
+    bookingId: string;
+    authorId: string;
+    targetId: string;
+    targetRole: UserRole;
+    rating: number;
+    comment?: string;
+  }, existingReview);
 
   // Update booking with review reference
   if (review.targetRole === UserRole.MODEL) {
-    await supabase
-      .from('bookings')
-      .update({ client_review_id: data.id })
-      .eq('id', review.bookingId);
+    await retryWithoutMissingColumn(
+      (updates) => supabase.from('bookings').update(updates).eq('id', review.bookingId),
+      { client_review_id: reviewId },
+      'client_review_id'
+    );
   } else {
-    await supabase
-      .from('bookings')
-      .update({ model_review_id: data.id })
-      .eq('id', review.bookingId);
+    await retryWithoutMissingColumn(
+      (updates) => supabase.from('bookings').update(updates).eq('id', review.bookingId),
+      { model_review_id: reviewId },
+      'model_review_id'
+    );
   }
 
-  // The trigger will automatically update user statistics
+  if (review.targetRole === UserRole.MODEL) {
+    await refreshModelRankingScore(review.targetId);
+  }
+};
+
+export const disputeReview = async (reviewId: string, reporterId: string, details: string): Promise<void> => {
+  const { data: review, error } = await supabase
+    .from('reviews')
+    .select('id, author_id, target_id, target_role, rating, comment, booking_id, bookings (status, project_title, model_id, client_id)')
+    .eq('id', reviewId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!review) throw new Error('Review not found.');
+
+  const booking = Array.isArray(review.bookings) ? review.bookings[0] : review.bookings;
+  if (!booking || (booking.model_id !== reporterId && booking.client_id !== reporterId)) {
+    throw new Error('You can only dispute reviews connected to your own booking.');
+  }
+
+  if (review.author_id === reporterId) {
+    throw new Error('You cannot dispute your own review.');
+  }
+
+  if (!['cancelled', 'reported'].includes(booking.status) && Number(review.rating || 0) > 2) {
+    throw new Error('Review disputes are reserved for cancelled/reported bookings or serious low ratings.');
+  }
+
+  const { data: reporter } = await supabase
+    .from('users')
+    .select('role')
+    .eq('id', reporterId)
+    .maybeSingle();
+
+  await submitReport({
+    reporterId,
+    reporterRole: reporter?.role || UserRole.MODEL,
+    reportedUserId: review.author_id,
+    reportedUserRole: review.target_role === UserRole.MODEL ? UserRole.CLIENT : UserRole.MODEL,
+    reason: ReportReason.OTHER,
+    bookingId: review.booking_id,
+    details: `Review dispute for ${booking.project_title || 'booking'}: ${details || 'No additional details provided.'}\n\nReview: ${review.comment || 'No comment'}\nRating: ${review.rating}/5`,
+  });
 };
 
 export const submitReport = async (reportOrReporterId: {
@@ -2104,6 +2812,8 @@ export const submitReport = async (reportOrReporterId: {
   reportedUserRole: UserRole;
   reason: ReportReason;
   details?: string;
+  bookingId?: string;
+  projectId?: string;
 } | string, reporterRole?: UserRole, reportedUserId?: string, reason?: ReportReason, details?: string): Promise<void> => {
   const report =
     typeof reportOrReporterId === 'string'
@@ -2123,15 +2833,25 @@ export const submitReport = async (reportOrReporterId: {
 
   await enforceRateLimit('report_submission', report.reporterId, 5, 3600);
 
-  const { error } = await supabase.from('reports').insert({
+  const payload = {
     reporter_id: report.reporterId,
     reporter_role: report.reporterRole,
     reported_user_id: report.reportedUserId,
     reported_user_role: report.reportedUserRole,
+    booking_id: report.bookingId || null,
+    project_id: report.projectId || null,
     reason: report.reason,
     details: report.details,
     status: 'PENDING',
-  });
+  };
+
+  let { error } = await supabase.from('reports').insert(payload);
+
+  if (error && (isMissingColumnError(error, 'booking_id') || isMissingColumnError(error, 'project_id'))) {
+    const { booking_id, project_id, ...legacyPayload } = payload;
+    const retry = await supabase.from('reports').insert(legacyPayload);
+    error = retry.error;
+  }
 
   if (error) throw error;
 
@@ -3097,10 +3817,10 @@ function transformModelData(data: any): ModelProfile {
 
   return {
     uid: data.id,
-    displayName: user?.display_name || '',
+    displayName: user?.display_name || data.display_name || 'Talent',
     displayNameChangedAt: user?.display_name_changed_at,
-    email: user?.email || '',
-    bio: user?.bio,
+    email: user?.email || data.email || '',
+    bio: user?.bio || data.bio,
     photoUrl: profileImage,
     age: data.age || undefined,
     height: data.height || 0,
@@ -3196,6 +3916,7 @@ function transformBooking(data: any): Booking {
     id: data.id,
     projectId: data.project_id,
     projectTitle: data.project_title,
+    eventDate: data.event_date || undefined,
     modelId: data.model_id,
     modelName: data.model_name,
     clientId: data.client_id,
@@ -3205,6 +3926,11 @@ function transformBooking(data: any): Booking {
     currentOffer: data.current_offer_amount || 0,
     history,
     paymentProofUrl: data.payment_proof_url,
+    cancellationReason: data.cancellation_reason,
+    cancelledBy: data.cancelled_by,
+    reportReason: data.report_reason,
+    reportDetails: data.report_details,
+    reportedBy: data.reported_by,
     modelReviewId: data.model_review_id,
     clientReviewId: data.client_review_id,
     createdAt: data.created_at,
@@ -3220,9 +3946,12 @@ function transformReport(data: any): Report {
     reporterRole: data.reporter_role,
     reportedUserId: data.reported_user_id,
     reportedUserRole: data.reported_user_role,
+    projectId: data.project_id,
+    bookingId: data.booking_id,
     reason: data.reason,
     details: data.details,
     status: data.status as ReportStatus,
+    adminNotes: data.admin_notes,
     createdAt: data.created_at,
     resolvedAt: data.resolved_at,
   };
@@ -3354,6 +4083,67 @@ export const getClientPublicStats = async (clientId: string) => {
     averageRating: user?.average_rating || 0,
     reviewsCount: user?.reviews_count || 0,
   };
+};
+
+export const getModelRankingSignals = async (limit = 10): Promise<ModelRankingSignal[]> => {
+  const { data: models, error } = await supabase
+    .from('models')
+    .select('id, ranking_score, profile_completeness, users (display_name, average_rating, reviews_count)')
+    .order('ranking_score', { ascending: false })
+    .limit(limit);
+
+  if (error) throw error;
+  const modelIds = (models || []).map((model: any) => model.id).filter(Boolean);
+  if (modelIds.length === 0) return [];
+
+  const [{ data: bookings }, { data: applications }] = await Promise.all([
+    supabase
+      .from('bookings')
+      .select('model_id, status')
+      .in('model_id', modelIds)
+      .in('status', ['completed', 'cancelled', 'reported']),
+    supabase
+      .from('project_applications')
+      .select('model_id, status')
+      .in('model_id', modelIds),
+  ]);
+
+  const bookingStats = new Map<string, { completed: number; cancelled: number }>();
+  (bookings || []).forEach((booking: any) => {
+    const stats = bookingStats.get(booking.model_id) || { completed: 0, cancelled: 0 };
+    if (booking.status === 'completed') stats.completed += 1;
+    if (['cancelled', 'reported'].includes(booking.status)) stats.cancelled += 1;
+    bookingStats.set(booking.model_id, stats);
+  });
+
+  const applicationStats = new Map<string, { total: number; approved: number }>();
+  (applications || []).forEach((application: any) => {
+    const stats = applicationStats.get(application.model_id) || { total: 0, approved: 0 };
+    stats.total += 1;
+    if (application.status === 'approved') stats.approved += 1;
+    applicationStats.set(application.model_id, stats);
+  });
+
+  return (models || []).map((model: any) => {
+    const user = Array.isArray(model.users) ? model.users[0] : model.users;
+    const bookingsForModel = bookingStats.get(model.id) || { completed: 0, cancelled: 0 };
+    const applicationsForModel = applicationStats.get(model.id) || { total: 0, approved: 0 };
+    const responseRate = applicationsForModel.total > 0
+      ? Math.round((applicationsForModel.approved / applicationsForModel.total) * 100)
+      : 0;
+
+    return {
+      modelId: model.id,
+      displayName: user?.display_name || 'Talent',
+      rankingScore: Number(model.ranking_score || 0),
+      averageRating: Number(user?.average_rating || 0),
+      reviewsCount: Number(user?.reviews_count || 0),
+      completedJobs: bookingsForModel.completed,
+      cancelledJobs: bookingsForModel.cancelled,
+      responseRate,
+      profileCompleteness: Number(model.profile_completeness || 0),
+    };
+  });
 };
 
 export const subscribeToAgencyOutgoingInvites = (
@@ -3648,7 +4438,7 @@ export const subscribeToProjectInvites = (
   callback: (projects: Project[]) => void
 ): (() => void) => {
   let active = true;
-  let debounceTimer: NodeJS.Timeout | null = null;
+  let debounceTimer: DebounceTimer = null;
 
   const fetchProjects = async () => {
     // Clear any pending debounced fetch
@@ -3750,7 +4540,7 @@ export const subscribeToAcceptedProjects = (
   let active = true;
 
   const fetchProjects = async () => {
-    // Get accepted applications
+    // Get approved applications
     const { data, error } = await supabase
       .from('project_applications')
       .select(`
@@ -3760,7 +4550,7 @@ export const subscribeToAcceptedProjects = (
         )
       `)
       .eq('model_id', modelUid)
-      .eq('status', 'accepted');
+      .eq('status', 'approved');
 
     if (error) {
       console.error('Error fetching accepted projects:', error);

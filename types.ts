@@ -336,8 +336,8 @@ export interface Project {
 export interface SearchFilters {
   categories: Category[];
   locations: District[];
-  minHeight: number;
-  maxHeight: number;
+  minHeight?: number;
+  maxHeight?: number;
   minAge?: number;
   maxAge?: number;
   minRate?: number;
@@ -370,11 +370,20 @@ export enum ReportReason {
 export interface Review {
   id: string;
   authorId: string;
+  authorName?: string;
+  authorRole?: UserRole;
   targetId: string;
+  targetName?: string;
+  targetRole?: UserRole;
   bookingId: string;
+  projectTitle?: string;
+  bookingStatus?: BookingStatus;
   rating: number;
   comment: string;
+  editCount?: number;
+  canEdit?: boolean;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface BookingOffer {
@@ -501,6 +510,18 @@ export interface Report {
   adminNotes?: string;
   createdAt: string;
   resolvedAt?: string;
+}
+
+export interface ModelRankingSignal {
+  modelId: string;
+  displayName: string;
+  rankingScore: number;
+  averageRating: number;
+  reviewsCount: number;
+  completedJobs: number;
+  cancelledJobs: number;
+  responseRate: number;
+  profileCompleteness: number;
 }
 
 export interface DeletionLog {

@@ -73,12 +73,9 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
             <div className="hidden md:flex items-center space-x-8">
               
-              {/* Only Guests and Clients see Search */}
-              {!isTalent && (
-                <Link to="/" className="text-sm font-medium text-brand-muted hover:text-white transition-colors uppercase tracking-wide">
-                  Talent Search
-                </Link>
-              )}
+              <Link to="/" className="text-sm font-medium text-brand-muted hover:text-white transition-colors uppercase tracking-wide">
+                Talent Search
+              </Link>
 
               {/* Agencies Discovery Link */}
               <Link to="/agencies" className="text-sm font-medium text-brand-muted hover:text-white transition-colors uppercase tracking-wide">
@@ -171,9 +168,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   <Link to="/admin" className="block px-3 py-3 rounded-lg text-base font-bold text-red-500 bg-red-500/10 hover:bg-red-500/20" onClick={() => setIsMenuOpen(false)}>Admin Dashboard</Link>
                )}
 
-               {!isTalent && (
-                  <Link to="/" className="block px-3 py-3 rounded-lg text-base font-medium text-brand-text hover:bg-white/5 hover:text-brand-primary" onClick={() => setIsMenuOpen(false)}>Talent Search</Link>
-               )}
+              <Link to="/" className="block px-3 py-3 rounded-lg text-base font-medium text-brand-text hover:bg-white/5 hover:text-brand-primary" onClick={() => setIsMenuOpen(false)}>Talent Search</Link>
 
                <Link to="/agencies" className="block px-3 py-3 rounded-lg text-base font-medium text-brand-text hover:bg-white/5 hover:text-brand-primary" onClick={() => setIsMenuOpen(false)}>Agencies</Link>
 
@@ -220,7 +215,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             <div>
               <h3 className="text-white font-semibold mb-6 uppercase tracking-wider text-xs">Platform</h3>
               <ul className="space-y-4 text-sm text-brand-muted">
-                {!isTalent && <li><Link to="/" className="hover:text-brand-primary transition-colors">Talent Search</Link></li>}
+                <li><Link to="/" className="hover:text-brand-primary transition-colors">Talent Search</Link></li>
                 <li><Link to="/agencies" className="hover:text-brand-primary transition-colors">Agencies</Link></li>
                 {isTalent && <li><Link to="/dashboard" className="hover:text-brand-primary transition-colors">My Dashboard</Link></li>}
                 {!isTalent && <li><Link to="/shortlist" className="hover:text-brand-primary transition-colors">My Shortlist</Link></li>}

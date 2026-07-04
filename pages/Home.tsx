@@ -1,17 +1,20 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ModelProfile, Category, District, Gender, SkinTone, UserRole } from '../types';
+import { ModelProfile, Category, District, Gender, SkinTone } from '../types';
 import { subscribeToSearchModels } from '../services/supabase.service';
 import { useAuth } from '../auth/AuthContext';
-import { Navigate, Link } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import ModelCard from '../components/ModelCard';
 import { Search, Sparkles, ChevronDown, Lock } from 'lucide-react';
 
 const Home: React.FC = () => {
   const { role, user, loading: authLoading } = useAuth();
+  const LOGGED_IN_PAGE_SIZE = 12;
   
   const [models, setModels] = useState<ModelProfile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hasMoreModels, setHasMoreModels] = useState(false);
+  const [visibleLimit, setVisibleLimit] = useState(LOGGED_IN_PAGE_SIZE);
   
   // Filters State
   const [selectedDistrict, setSelectedDistrict] = useState<string>('');
@@ -20,8 +23,13 @@ const Home: React.FC = () => {
   const [selectedSkinTone, setSelectedSkinTone] = useState<string>('');
   
   const heroRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
 
   const isGuest = !user;
+
+  useEffect(() => {
+    setVisibleLimit(LOGGED_IN_PAGE_SIZE);
+  }, [selectedCategory, selectedDistrict, selectedGender, selectedSkinTone, isGuest]);
 
   useEffect(() => {
     setLoading(true);
@@ -35,28 +43,42 @@ const Home: React.FC = () => {
         maxHeight: 300,
         gender: isGuest ? null : (selectedGender ? (selectedGender as Gender) : null),
         skinTones: isGuest ? [] : (selectedSkinTone ? [selectedSkinTone as SkinTone] : []),
-        onlyAvailable: false
-    }, (results) => {
+        onlyAvailable: false,
+        page: 0,
+        limit: isGuest ? 10 : visibleLimit
+    }, (results, meta) => {
         if (isGuest) {
             // GUEST LOGIC: Top 10 Rated Only
             const topRated = [...results]
                 .sort((a, b) => (b.rankingScore || 0) - (a.rankingScore || 0))
                 .slice(0, 10);
             setModels(topRated);
+            setHasMoreModels(false);
         } else {
             // LOGGED IN: Full Results
             setModels(results);
+            setHasMoreModels(Boolean(meta?.hasMore));
         }
         setLoading(false);
     });
 
     return () => unsubscribe();
-  }, [selectedCategory, selectedDistrict, selectedGender, selectedSkinTone, isGuest]);
+  }, [selectedCategory, selectedDistrict, selectedGender, selectedSkinTone, isGuest, visibleLimit]);
 
-  // Redirect Models/Agencies to Dashboard immediately
-  if (!authLoading && (role === UserRole.MODEL || role === UserRole.AGENCY)) {
-    return <Navigate to="/dashboard" />;
-  }
+  useEffect(() => {
+    if (isGuest || !hasMoreModels || loading) return;
+    const node = loadMoreRef.current;
+    if (!node) return;
+
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setVisibleLimit((current) => current + LOGGED_IN_PAGE_SIZE);
+      }
+    }, { rootMargin: '400px 0px' });
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMoreModels, isGuest, loading]);
 
   return (
     <div className="flex flex-col min-h-screen">
@@ -147,7 +169,7 @@ const Home: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-end mb-8">
             <h2 className="text-3xl font-bold text-white">
-                {isGuest ? "Top Rated Talent" : "Featured Models"}
+                {isGuest ? "Top Rated Talent" : "Featured Talent"}
             </h2>
             <p className="text-brand-muted text-sm">
                 {isGuest ? "Displaying Top 10" : `${models.length} profiles matched`}
@@ -172,6 +194,22 @@ const Home: React.FC = () => {
               <p className="text-brand-muted">Try broadening your filters.</p>
             </div>
           )}
+
+            {!isGuest && models.length > 0 && (
+              <div ref={loadMoreRef} className="mt-10 flex justify-center">
+                {hasMoreModels ? (
+                  <button
+                    type="button"
+                    onClick={() => setVisibleLimit((current) => current + LOGGED_IN_PAGE_SIZE)}
+                    className="px-6 py-3 bg-white/5 hover:bg-white/10 border border-white/10 text-white font-bold rounded-lg transition-colors"
+                  >
+                    Load More Talent
+                  </button>
+                ) : (
+                  <span className="text-sm text-brand-muted">All matching talent loaded</span>
+                )}
+              </div>
+            )}
           
           {isGuest && (
               <div className="mt-12 text-center">

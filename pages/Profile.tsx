@@ -1,8 +1,8 @@
 
 import React, { useEffect, useState, useContext } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getModelProfile, incrementModelViews, getUserData } from '../services/supabase.service';
-import { ModelProfile, UserData } from '../types';
+import { getModelProfile, incrementModelViews, getUserData, subscribeToUserReviews } from '../services/supabase.service';
+import { ModelProfile, Review, UserData } from '../types';
 import { MapPin, Share2, CheckCircle, Camera, Heart, PlayCircle, Building, Star, Maximize2, X } from 'lucide-react';
 import { ShortlistContext } from '../App';
 import OptimizedImage from '../components/OptimizedImage';
@@ -13,12 +13,16 @@ const Profile: React.FC = () => {
   const navigate = useNavigate();
   const [model, setModel] = useState<ModelProfile | null>(null);
   const [userStats, setUserStats] = useState<UserData | null>(null);
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [showAllReviews, setShowAllReviews] = useState(false);
   const [fullscreenImage, setFullscreenImage] = useState<{ src: string; alt: string } | null>(null);
   const { shortlist, toggleShortlist } = useContext(ShortlistContext);
   const { addNotification } = useNotification();
 
   useEffect(() => {
     window.scrollTo(0,0);
+    let unsubscribeReviews: () => void = () => {};
+
     if (id) {
       // 1. Fetch Profile
       getModelProfile(id).then(data => {
@@ -32,7 +36,10 @@ const Profile: React.FC = () => {
       });
       // 3. Fetch User Data for Rating
       getUserData(id).then(setUserStats);
+      unsubscribeReviews = subscribeToUserReviews(id, 'received', setReviews, undefined, 30);
     }
+
+    return () => unsubscribeReviews();
   }, [id, navigate]);
 
   useEffect(() => {
@@ -80,6 +87,7 @@ const Profile: React.FC = () => {
   };
 
   const videoEmbedUrl = model.media.videos?.[0] ? getYouTubeEmbedUrl(model.media.videos[0]) : null;
+  const visibleReviews = showAllReviews ? reviews : reviews.slice(0, 3);
 
   const handleShare = async () => {
     const shareUrl = window.location.href;
@@ -257,6 +265,52 @@ const Profile: React.FC = () => {
                    </p>
                 </div>
                )}
+
+               <div>
+                 <div className="flex items-center justify-between gap-4 mb-4">
+                   <h3 className="text-xl font-bold text-white">Reviews</h3>
+                   <span className="text-sm text-brand-muted">{reviews.length} total</span>
+                 </div>
+
+                 {reviews.length === 0 ? (
+                   <div className="text-sm text-brand-muted border border-white/5 border-dashed rounded-xl p-5">
+                     No reviews yet.
+                   </div>
+                 ) : (
+                   <div className="space-y-3">
+                     {visibleReviews.map((review) => (
+                       <div key={review.id} className="bg-brand-surface border border-white/10 rounded-xl p-4">
+                         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-3">
+                           <div>
+                             <h4 className="font-bold text-white">{review.authorName}</h4>
+                             <p className="text-xs text-brand-muted">
+                               {review.projectTitle || 'Booking review'} • {new Date(review.createdAt).toLocaleDateString()}
+                             </p>
+                           </div>
+                           <div className="flex text-brand-primary">
+                             {[1, 2, 3, 4, 5].map((star) => (
+                               <Star key={star} className={`w-4 h-4 ${star <= review.rating ? 'fill-current' : 'text-gray-600'}`} />
+                             ))}
+                           </div>
+                         </div>
+                         {review.comment && (
+                           <p className="text-sm text-brand-muted leading-relaxed">{review.comment}</p>
+                         )}
+                       </div>
+                     ))}
+
+                     {reviews.length > 3 && (
+                       <button
+                         type="button"
+                         onClick={() => setShowAllReviews((current) => !current)}
+                         className="px-4 py-2 bg-white/5 hover:bg-white/10 text-white text-sm font-bold rounded-lg transition-colors"
+                       >
+                         {showAllReviews ? 'Show Less' : 'Show More Reviews'}
+                       </button>
+                     )}
+                   </div>
+                 )}
+               </div>
             </div>
           </div>
         </div>

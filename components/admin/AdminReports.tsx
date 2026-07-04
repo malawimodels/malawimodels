@@ -36,6 +36,20 @@ const AdminReports: React.FC<AdminReportsProps> = ({ reports, onReview, onWarn, 
                               <h3 className="text-lg font-bold text-white mb-1">
                                   Reported: {report.reason}
                               </h3>
+                              {(report.bookingId || report.projectId) && (
+                                  <div className="mb-3 flex flex-wrap gap-2 text-[10px] font-bold uppercase tracking-wide">
+                                      {report.bookingId && (
+                                          <span className="px-2 py-1 rounded bg-brand-primary/10 text-brand-primary border border-brand-primary/20">
+                                              Booking {report.bookingId.substring(0, 8)}
+                                          </span>
+                                      )}
+                                      {report.projectId && (
+                                          <span className="px-2 py-1 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                              Project {report.projectId.substring(0, 8)}
+                                          </span>
+                                      )}
+                                  </div>
+                              )}
                               <div className="grid grid-cols-2 gap-4 my-3 text-sm">
                                   <div className="bg-white/5 p-3 rounded-lg border border-white/5">
                                       <div className="text-[10px] uppercase text-brand-muted font-bold">Reporter</div>

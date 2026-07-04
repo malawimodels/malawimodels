@@ -16,9 +16,10 @@ import ModelBookingsView from '../components/dashboard/ModelBookingsView';
 import ModelOpportunitiesView from '../components/dashboard/ModelOpportunitiesView';
 import ModelOverview from '../components/dashboard/ModelOverview';
 import ModelProfileSettings from '../components/dashboard/ModelProfileSettings';
+import ReviewHistoryView from '../components/dashboard/ReviewHistoryView';
 import OptimizedImage from '../components/OptimizedImage';
 
-type Tab = 'overview' | 'profile' | 'opportunities' | 'bookings';
+type Tab = 'overview' | 'profile' | 'opportunities' | 'bookings' | 'reviews';
 
 const Dashboard: React.FC = () => {
   const { user, role } = useAuth();
@@ -283,6 +284,8 @@ const Dashboard: React.FC = () => {
                     <button onClick={() => setActiveTab('overview')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow sm:flex-grow-0 transition-all ${activeTab === 'overview' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Overview</button>
                     <button onClick={() => setActiveTab('bookings')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow sm:flex-grow-0 transition-all ${activeTab === 'bookings' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Bookings</button>
                     <button onClick={() => setActiveTab('opportunities')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow sm:flex-grow-0 transition-all ${activeTab === 'opportunities' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Opportunities</button>
+                    <button onClick={() => setActiveTab('reviews')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow sm:flex-grow-0 transition-all ${activeTab === 'reviews' ? 'bg-brand-surface shadow-md text-brand-primary' : 'text-brand-muted hover:text-white'}`}>Reviews</button>
+                    <button onClick={() => navigate('/')} className="px-4 py-2 rounded-lg text-sm font-bold flex-grow sm:flex-grow-0 transition-all text-brand-muted hover:text-white">Talent Search</button>
                     <button onClick={() => setActiveTab('profile')} className={`px-4 py-2 rounded-lg text-sm font-bold flex-grow sm:flex-grow-0 transition-all ${activeTab === 'profile' ? 'bg-brand-surface shadow-md text-white' : 'text-brand-muted hover:text-white'}`}>Profile</button>
                 </div>
             </div>
@@ -319,6 +322,15 @@ const Dashboard: React.FC = () => {
              <div className="animate-slide-up">
                  <ModelBookingsView />
              </div>
+        )}
+
+        {activeTab === 'reviews' && user && (
+            <ReviewHistoryView
+                mode="received"
+                userId={user.uid}
+                title="Reviews Received"
+                emptyText="No client reviews received yet."
+            />
         )}
     </div>
   );
